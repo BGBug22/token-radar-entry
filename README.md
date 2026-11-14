@@ -4,7 +4,9 @@ A token launch radar for the make.fun bounty `token-radar-01`.
 
 It reads the sealed DefiLlama snapshot (`input/snapshot.json`), scores every pre-token
 protocol with one transparent model, and writes a ranked board plus a static dashboard
-a reader can use: the board, a detail view for every protocol, and filters.
+a reader can use: the board, a detail view for every protocol, and filters. Two tools sit
+on top of the board: a **Top movers** panel (the fastest-growing TVL among the rows the
+filters show) and an **Export CSV** button that downloads exactly the rows on screen.
 
 ## The model (radar-2)
 
@@ -37,7 +39,11 @@ output directory. The program runs twice with identical bytes.
 ## Files
 
 - `main.ts` — entrypoint: reads the snapshot, writes the board, the data and the dossier.
-- `lib/model.ts` — the radar-2 model, the farm plans and the board gate.
-- `dashboard/` — the static page (index.html, app.css, app.js), no network.
+- `lib/model.ts` — the radar-2 model, the farm plans and the board gate. The model math
+  lives in small named helpers (growth, maturity, breadth) and the farm wording in one
+  category table, so the model and the dashboard read the same rule.
+- `dashboard/` — the static page (index.html, app.css, app.js), no network. The page
+  recomputes each row's implied value, shows a Top movers panel, and exports the shown
+  rows as CSV.
 - `vendor/makefun-board.ts` — the kit's dossier library, unchanged.
 - `screenshots/` — board, detail and filtered views of the dashboard.

@@ -160,6 +160,15 @@ tr.top3 .bar i { background: var(--gold); }
 .steps b { display: block; font-weight: 550; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 
+.movers { margin-top: var(--s4); padding: var(--s5); display: grid; gap: var(--s3); }
+.movers-list { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s2); }
+.mover { display: flex; align-items: center; gap: var(--s4); width: 100%; padding: var(--s3) var(--s4); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); text-align: left; }
+.mover:hover { background: var(--accent-soft); }
+.mover-rank { font-family: var(--font-num); font-weight: 650; color: var(--muted); min-width: 44px; flex: none; }
+.mover-name { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.mover-name b { font-weight: 650; }
+.mover .num { font-size: 15px; font-weight: 650; }
+
 @media (max-width: 960px) {
   .shell { padding: var(--s4); }
   .lede { grid-template-columns: 1fr; gap: var(--s4); }

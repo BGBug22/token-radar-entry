@@ -20,6 +20,9 @@
 // users and more liquidity, so its launch is worth a little more per dollar of TVL, capped at five
 // extra chains (+10%). Every factor is a number the snapshot itself carries; no protocol name is
 // ever special-cased: the same function scores every row.
+//
+// The farm wording lives in one table (CATEGORY_RULES) below, so the model and the dashboard read
+// the same rule and can never drift apart in what they tell the farmer.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -184,16 +187,46 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The four multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; breadthMult: number; chainsCount: number; age: number | null } {
-  const age = ageDays(asOf, protocol.listed_at);
-  const rawGrowth = finite(protocol.change_7d, 0);
-  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+/** One protocol's implied value and the four inputs the dashboard shows for it. */
+export interface ImpliedBreakdown {
+  implied: number;
+  growthPct: number;
+  growthMult: number;
+  maturityMult: number;
+  breadthMult: number;
+  chainsCount: number;
+  age: number | null;
+}
+
+/** The clamped seven-day growth: the snapshot's change, held inside the model's floor and cap. */
+function clampGrowth(rawGrowth: number, model: ModelConstants): number {
+  return Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
+}
+
+/** The growth multiplier: 1 plus the clamped growth, weighted by half. */
+function growthMultiplier(growthPct: number, model: ModelConstants): number {
+  return 1 + (growthPct / 100) * model.growth_weight;
+}
+
+/** The maturity multiplier: 0.60 for a brand-new protocol, 1.00 after three years. */
+function maturityMultiplier(age: number | null, model: ModelConstants): number {
   const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+  return model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+}
+
+/** The breadth multiplier: +2% per extra chain, capped at five. */
+function breadthMultiplier(chainsCount: number, model: ModelConstants): number {
+  return 1 + model.breadth_per_chain * Math.min(Math.max(chainsCount - 1, 0), model.breadth_cap_chains);
+}
+
+/** The four multipliers and the implied value one protocol gets under `model`. */
+export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): ImpliedBreakdown {
+  const age = ageDays(asOf, protocol.listed_at);
+  const growthPct = clampGrowth(finite(protocol.change_7d, 0), model);
+  const growthMult = growthMultiplier(growthPct, model);
+  const maturityMult = maturityMultiplier(age, model);
   const chainsCount = protocol.chains.length;
-  const breadthMult = 1 + model.breadth_per_chain * Math.min(Math.max(chainsCount - 1, 0), model.breadth_cap_chains);
+  const breadthMult = breadthMultiplier(chainsCount, model);
   const base = protocol.tvl_usd * model.base_multiple;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult * breadthMult));
   return { implied, growthPct, growthMult, maturityMult, breadthMult, chainsCount, age };
@@ -307,39 +340,103 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
+/**
+ * One category's farm wording: the keywords that name it, the action the farmer takes with the
+ * capital, and the small weekly touch that keeps the wallet active. The table is the one place
+ * the wording lives: actionFor and weeklyActionFor read the same rule, so the model (this file)
+ * and the dashboard (dashboard/app.js) can never drift apart in what they tell the farmer.
+ * Rules are tried in order; the first whose keyword appears in the category wins. A category
+ * that matches no rule falls back to the plain deposit, and the plain weekly touch.
+ */
+interface CategoryRule {
+  keywords: string[];
+  action: (name: string, capital: number, chain: string) => string;
+  weekly: string;
+}
+
+const CATEGORY_RULES: CategoryRule[] = [
+  {
+    keywords: ['lend', 'cdp', 'collateral'],
+    action: (name, capital, chain) => `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`,
+    weekly: 'a small extra supply, a borrow and repay, or a vote',
+  },
+  {
+    keywords: ['dex', 'yield', 'leveraged farm'],
+    action: (name, capital, chain) => `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`,
+    weekly: 'a small swap, a liquidity top-up, or a claim of rewards',
+  },
+  {
+    keywords: ['bridge'],
+    action: (name, capital, chain) => `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`,
+    weekly: 'a small bridge in either direction',
+  },
+  {
+    keywords: ['staking', 'restak'],
+    action: (name, capital, chain) => `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`,
+    weekly: 'a small extra stake or a rewards claim',
+  },
+  {
+    keywords: ['perpetual', 'derivative'],
+    action: (name, capital, chain) => `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`,
+    weekly: 'one small trade or a margin adjustment',
+  },
+  {
+    keywords: ['prediction'],
+    action: (name, capital, chain) => `Fund $${capital} and place one market position on ${name}.`,
+    weekly: 'one small market position',
+  },
+  {
+    keywords: ['curator', 'allocator', 'risk'],
+    action: (name, capital, chain) => `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`,
+    weekly: 'a small extra vault deposit or a vote',
+  },
+  {
+    keywords: ['stable'],
+    action: (name, capital, chain) => `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`,
+    weekly: 'a small mint, deposit or redemption',
+  },
+  {
+    keywords: ['rwa'],
+    action: (name, capital, chain) => `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`,
+    weekly: 'a small mint or a rewards claim',
+  },
+  {
+    keywords: ['insurance'],
+    action: (name, capital, chain) => `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`,
+    weekly: 'a cover renewal check or a claim review',
+  },
+  {
+    keywords: ['basis'],
+    action: (name, capital, chain) => `Deposit $${capital} of USDC into ${name}'s basis vault on ${chain} and keep the position open.`,
+    weekly: 'a deposit, a swap or a vote',
+  },
+  {
+    keywords: ['chain'],
+    action: (name, capital, chain) => `Use $${capital} of the chain's native asset in ${name}'s app on ${chain} and keep the position open.`,
+    weekly: 'a deposit, a swap or a vote',
+  },
+];
+
+/** The first rule whose keyword appears in the category, or null when none matches. */
+function ruleFor(category: string | null): CategoryRule | null {
+  const c = (category ?? '').toLowerCase();
+  for (const rule of CATEGORY_RULES) {
+    if (rule.keywords.some((k) => c.includes(k))) return rule;
+  }
+  return null;
+}
+
 /** The category's one action, in the words a farmer can follow. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator') || c.includes('risk')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  if (c.includes('basis')) return `Deposit $${capital} of USDC into ${name}'s basis vault on ${chain} and keep the position open.`;
-  if (c.includes('chain')) return `Use $${capital} of the chain's native asset in ${name}'s app on ${chain} and keep the position open.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  const rule = ruleFor(p.category);
+  if (rule !== null) return rule.action(p.name, capital, chain);
+  return `Deposit $${capital} of USDC into ${p.name} on ${chain} and keep the position open.`;
 }
 
 /** The category's weekly action: the small repeated touch that keeps the wallet active. */
 function weeklyActionFor(p: SnapshotProtocol): string {
-  const c = (p.category ?? '').toLowerCase();
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'a small extra supply, a borrow and repay, or a vote';
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'a small swap, a liquidity top-up, or a claim of rewards';
-  if (c.includes('bridge')) return 'a small bridge in either direction';
-  if (c.includes('staking') || c.includes('restak')) return 'a small extra stake or a rewards claim';
-  if (c.includes('perpetual') || c.includes('derivative')) return 'one small trade or a margin adjustment';
-  if (c.includes('prediction')) return 'one small market position';
-  if (c.includes('curator') || c.includes('allocator') || c.includes('risk')) return 'a small extra vault deposit or a vote';
-  if (c.includes('stable')) return 'a small mint, deposit or redemption';
-  if (c.includes('rwa')) return 'a small mint or a rewards claim';
-  if (c.includes('insurance')) return 'a cover renewal check or a claim review';
-  return 'a deposit, a swap or a vote';
+  const rule = ruleFor(p.category);
+  return rule === null ? 'a deposit, a swap or a vote' : rule.weekly;
 }
 
 /**
