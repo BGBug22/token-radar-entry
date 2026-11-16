@@ -1,15 +1,155 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by implied value</title>
+<title>Launch Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
-<script src="../data.js"></script>
+<header class="top">
+  <div>
+    <h1>Launch Radar</h1>
+    <p class="sub">Pre-token protocols ranked by implied value</p>
+  </div>
+  <div class="meta">
+    <p>DeFiLlama snapshot <span data-meta="asOf">2026-11-14</span> · <span data-meta="protocols">758</span> protocols · floor $50M</p>
+    <p class="model">model <span data-meta="modelName">comps-fit-1</span> · fitted on the snapshot&rsquo;s own traded tokens</p>
+  </div>
+</header>
+
+<section class="stats" aria-label="Coverage">
+  <div class="stat"><b data-stat="watchlist">40/40</b><span>watchlist covered</span></div>
+  <div class="stat"><b data-stat="boardRows">198</b><span>pre-token ranked</span></div>
+  <div class="stat"><b data-stat="comps">128</b><span>traded comps</span></div>
+  <div class="stat"><b data-stat="setAside">560</b><span>set aside</span></div>
+  <div class="stat"><b data-stat="verdicts">130/54/14</b><span>farm / thin / skip</span></div>
+  <div class="stat"><b data-stat="loo">&times;3.52</b><span>LOO median miss</span></div>
+</section>
+
+<p id="badge" class="badge pending">checking the page against board.json&hellip;</p>
+
+<main class="layout">
+  <section class="board-col">
+    <nav class="tabs" aria-label="Views">
+      <button class="tab active" data-tab="board" type="button">Board <span data-tab-count="board">198</span></button>
+      <button class="tab" data-tab="early" type="button">Early finds <span data-tab-count="early">138</span></button>
+      <button class="tab" data-tab="method" type="button">Method</button>
+    </nav>
+
+    <div id="panel-board" class="panel">
+      <div class="filters">
+        <input id="f-search" type="search" placeholder="Search a protocol&hellip;" aria-label="Search a protocol">
+        <select id="f-category" aria-label="Category"><option value="">All categories</option></select>
+        <select id="f-chain" aria-label="Chain"><option value="">All chains</option></select>
+        <select id="f-tier" aria-label="Tier">
+          <option value="">All tiers</option>
+          <option value="watchlist">Watchlist</option>
+          <option value="early">Early finds</option>
+        </select>
+        <select id="f-verdict" aria-label="Farm verdict">
+          <option value="">All verdicts</option>
+          <option value="FARM">FARM</option>
+          <option value="THIN">THIN</option>
+          <option value="SKIP">SKIP</option>
+        </select>
+        <button id="f-reset" type="button">Reset</button>
+        <span id="shown-count" class="count">198 of 198 shown</span>
+      </div>
+      <div class="table-wrap">
+        <table id="board-table">
+          <thead>
+            <tr>
+              <th data-sort="rank" class="num sorted">#</th>
+              <th data-sort="name">Protocol</th>
+              <th data-sort="tvl" class="num">TVL</th>
+              <th data-sort="change" class="num">7D TVL</th>
+              <th data-sort="days" class="num">No token</th>
+              <th data-sort="implied" class="num">Implied value P25&ndash;P75</th>
+              <th data-sort="slice" class="num">Drop/$1K</th>
+              <th data-sort="net" class="num">Net</th>
+              <th data-sort="neth" class="num">Net/h</th>
+              <th data-sort="verdict">Farm verdict</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <p class="hint">Click a row for its factor breakdown and farm plan. Columns sort when clicked.</p>
+    </div>
+
+    <div id="panel-early" class="panel hidden">
+      <p class="lede">Early finds are the board&rsquo;s rows below the $50M floor: small protocols the radar exists to find early, before the crowd prices them. The same model and the same farm math as the main board.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="num">#</th><th>Protocol</th><th class="num">TVL</th><th class="num">No token</th><th class="num">Implied value</th><th class="num">Drop/$1K</th><th class="num">Net</th><th>Farm verdict</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-early"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-method" class="panel hidden">
+      <h2>How a row is valued</h2>
+      <p class="formula">implied = 10<sup data-meta="a">3.0247</sup> &times; TVL<sup data-meta="b">0.5223</sup> &times; Peers &times; Momentum &times; Record &times; Kin</p>
+      <p>The size curve is an OLS fit on log<sub>10</sub> market cap against log<sub>10</sub> TVL over the snapshot&rsquo;s <span data-meta="comps">128</span> traded tokens (R&sup2; <span data-meta="r2">0.19</span>). The curve is honest about what it does not explain: most of a token&rsquo;s launch value is not its TVL. The factors bend the curve, they do not replace it.</p>
+      <dl>
+        <dt>Peers</dt>
+        <dd>Each category&rsquo;s mean log residual, shrunk toward zero with 20 pseudo-peers. Liquid Staking pays &times;0.74, Prediction Market &times;1.37. A category with no traded comps gets no offset.</dd>
+        <dt>Momentum</dt>
+        <dd>1 + half the 7-day TVL change, clamped to [0.6, 1.4]. A protocol growing 20% in a week is worth 10% more; one shrinking 20% is worth 10% less. No change recorded counts as no change.</dd>
+        <dt>Record</dt>
+        <dd>0.70 rising linearly to 1.00 over 730 days running with no token. A protocol listed two years ago with no token has survived two years of chances to launch one. An unknown listing date counts as 365 days.</dd>
+        <dt>Kin</dt>
+        <dd>&times;0.5 when a sibling under the same name stem already trades. No board row hits it.</dd>
+        <dt>Breadth</dt>
+        <dd>Chain count was tested and is <em>not</em> in the model: adding it did not improve the out-of-sample miss, so it stays out rather than flattering the fit.</dd>
+      </dl>
+      <h2>The farm, priced</h2>
+      <p>Deposit $1,000, hold 60 days. The slice is 10% of the implied launch, pro rata: 0.10 &times; implied &times; $1,000 / TVL. Costs are gas for 4 transactions on the protocol&rsquo;s cheapest chain plus $6.58 &mdash; what a 4% T-bill pays on $1,000 over 60 days. FARM when the net clears $5 an hour of the 2 active hours the plan takes; THIN when the net is non-negative but below that; SKIP when the net is negative. Break-even odds are costs divided by the slice: the launch chance at which the plan pays for itself.</p>
+      <h2>Out of sample</h2>
+      <p>Leave-one-out over the <span data-meta="comps">128</span> comps: median miss &times;<span data-meta="looMiss">3.52</span>, within 3&times; <span data-meta="looWithin3">46</span>%, within 10&times; <span data-meta="looWithin10">77</span>%, rank correlation <span data-meta="looRank">0.40</span>. A flat multiple (median market-cap-to-TVL, no curve) misses by &times;<span data-meta="flatMiss">5.07</span>. The curve wins on level, not on ranking &mdash; the flat multiple ranks marginally better (<span data-meta="flatRank">0.42</span>). Time split: fit on the <span data-meta="trainN">44</span> comps listed before 2024, test on the <span data-meta="testN">51</span> newer ones &mdash; median miss &times;<span data-meta="tsMiss">2.94</span> against &times;<span data-meta="tsFlat">5.20</span> flat. Bootstrap, 200 rounds, seed <span data-meta="seed">20261114</span>: a = <span data-meta="aMean">3.018</span> &plusmn; <span data-meta="aSd">0.643</span>, b = <span data-meta="bMean">0.522</span> &plusmn; <span data-meta="bSd">0.081</span>. Each row&rsquo;s P25&ndash;P75 band is the implied value times the leave-one-out residual band, &times;<span data-meta="bandLo">0.36</span> to &times;<span data-meta="bandHi">4.70</span>.</p>
+      <h2>What this is not</h2>
+      <p>The implied value is this radar&rsquo;s own claim, fitted from one snapshot &mdash; not a forecast, not a price, and not a promise that a token will ever launch. Most pre-token protocols never launch one. Real airdrops never ask for a seed phrase, a private key, or money up front.</p>
+    </div>
+
+    <section id="detail" class="detail hidden" aria-live="polite"></section>
+  </section>
+
+  <aside class="rail">
+    <section class="card">
+      <h2>Market line</h2>
+      <svg id="scatter" viewBox="0 0 340 240" role="img" aria-label="Scatter of market cap against TVL for the traded comps and implied value for the board"></svg>
+      <p class="note">Grey: the <span data-meta="comps">128</span> traded comps. Amber: the board. Dashed: the fitted curve. R&sup2; <span data-meta="r2">0.19</span> &mdash; TVL explains a fifth of launch value, no more.</p>
+    </section>
+    <section class="card">
+      <h2>Out of sample</h2>
+      <table class="mini">
+        <thead><tr><th></th><th class="num">Curve</th><th class="num">Flat</th></tr></thead>
+        <tbody id="oos-body"></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <h2>Farm next</h2>
+      <p class="note">Watchlist rows, best net per hour first.</p>
+      <ol id="farm-next" class="farm-next"></ol>
+    </section>
+    <section class="card">
+      <h2>How a row is valued</h2>
+      <p class="formula small">implied = 10<sup>a</sup> &times; TVL<sup>b</sup> &times; Peers &times; Momentum &times; Record &times; Kin</p>
+      <p class="note">a = <span data-meta="a">3.0247</span>, b = <span data-meta="b">0.5223</span>, fitted on the snapshot&rsquo;s traded tokens. Full method in the Method tab.</p>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <p>Implied value is the radar&rsquo;s own claim, fitted from the DeFiLlama snapshot of <span data-meta="asOf">2026-11-14</span> &mdash; not a forecast and not a promise that a token will launch. Real airdrops never ask for a seed phrase, a private key, or money up front.</p>
+</footer>
+
+<script src="data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

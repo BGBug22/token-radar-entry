@@ -1,49 +1,62 @@
-# Token Radar — model radar-2
+# Launch Radar — token-radar-01
 
-A token launch radar for the make.fun bounty `token-radar-01`.
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![make.fun · token-radar-01 · rank](https://make.fun/badge/token-radar-01/BGBug22/token-radar-entry/rank.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![make.fun · token-radar-01 · reward](https://make.fun/badge/token-radar-01/BGBug22/token-radar-entry/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-It reads the sealed DefiLlama snapshot (`input/snapshot.json`), scores every pre-token
-protocol with one transparent model, and writes a ranked board plus a static dashboard
-a reader can use: the board, a detail view for every protocol, and filters. Two tools sit
-on top of the board: a **Top movers** panel (the fastest-growing TVL among the rows the
-filters show) and an **Export CSV** button that downloads exactly the rows on screen.
+A radar for pre-token protocols: it ranks the protocols that have not
+launched a token yet by their implied launch value, fitted from the
+snapshot's own traded tokens, and prices a $1,000, 60-day farm of each
+one — net of gas and of the T-bill yield the $1,000 gives up.
 
-## The model (radar-2)
-
-```
-implied = round( tvl_usd x 0.25
-  x (1 + clamp(change_7d, -60, 120) / 100 x 0.5)
-  x (0.6 + min(age_days, 1095) / 1095 x 0.4)
-  x (1 + 0.02 x min(max(chains - 1, 0), 5)) )
-```
-
-- **Base:** a launch priced at a quarter of TVL.
-- **Growth:** seven-day TVL change, clamped and weighted by half.
-- **Maturity:** age since first listing, 0.60 new to 1.00 after three years.
-- **Breadth:** +2% per extra chain, capped at +10%.
-
-Every factor is a number the snapshot itself carries; no protocol name is special-cased.
-Protocols whose token already trades are set aside with their market cap, never mixed
-into the ranking. A protocol on the board records no token in the snapshot; that is not
-proof it has none, and nothing here predicts whether or when a token is issued.
-
-## Run
+## The model
 
 ```
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json|directory>
+implied = 10^a × TVL^b × Peers × Momentum × Record × Kin
 ```
 
-Writes `board.json`, `data.js`, `dashboard/`, `screenshots/` and `dossier.json` to the
-output directory. The program runs twice with identical bytes.
+The size curve is an OLS fit on log10 market cap against log10 TVL over
+the snapshot's 128 traded tokens (a ≈ 3.0247, b ≈ 0.5223, R² ≈ 0.19).
+Peers are per-category offsets, shrunk toward zero with 20 pseudo-peers.
+Momentum is 1 + half the 7-day TVL change, clamped to [0.6, 1.4].
+Record rises from 0.70 to 1.00 over 730 days running with no token.
+Kin halves the value when a sibling token already trades (no board row
+hits it). Chain count was tested and is not in the model: it did not
+improve the out-of-sample miss.
 
-## Files
+Out of sample, leave-one-out over the 128 comps: median miss ×3.52
+against ×5.07 for a flat market-cap-to-TVL multiple; within 3× for 46%
+of comps, within 10× for 77%. Time split (fit pre-2024, test newer):
+median miss ×2.94 against ×5.20 flat. Each row's P25–P75 band is the
+implied value times the leave-one-out residual band (×0.36–×4.70).
 
-- `main.ts` — entrypoint: reads the snapshot, writes the board, the data and the dossier.
-- `lib/model.ts` — the radar-2 model, the farm plans and the board gate. The model math
-  lives in small named helpers (growth, maturity, breadth) and the farm wording in one
-  category table, so the model and the dashboard read the same rule.
-- `dashboard/` — the static page (index.html, app.css, app.js), no network. The page
-  recomputes each row's implied value, shows a Top movers panel, and exports the shown
-  rows as CSV.
-- `vendor/makefun-board.ts` — the kit's dossier library, unchanged.
-- `screenshots/` — board, detail and filtered views of the dashboard.
+## The farm
+
+Deposit $1,000, hold 60 days. The slice is 10% of the implied launch,
+pro rata: 0.10 × implied × $1,000 / TVL. Costs are gas for 4 transactions
+on the protocol's cheapest chain plus $6.58 of T-bill yield given up.
+FARM when the net clears $5 an hour of the 2 active hours the plan
+takes; THIN when the net is non-negative but below that; SKIP when the
+net is negative.
+
+## The board
+
+198 rows: the 40-protocol watchlist plus the largest pre-token protocols
+below the $50M floor that pass the watchlist's exclusion rule. 138 rows
+are early finds below the floor; 560 protocols in the snapshot are set
+aside. The dashboard re-runs the model for every row and checks the
+values, the verdicts and the board's sha256 digest — the green badge at
+the top says so only when all of that passes.
+
+## Run it
+
+```
+node main.ts --input <snapshot.json> --output <dir>
+```
+
+Node 22, standard library only. The program runs twice with the same
+bytes: the same snapshot gives the same board, every run.
+
+Implied value is the radar's own claim, fitted from one snapshot — not a
+forecast and not a promise that a token will launch. Real airdrops never
+ask for a seed phrase, a private key, or money up front.
