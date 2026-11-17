@@ -66,16 +66,12 @@ function verdictClass(v) {
 
 const GAS = META.farm.gasTable;
 const GAS_DEFAULT = META.farm.gasDefaultPerTx;
-
-function nameStem(name) {
-  let s = name.toLowerCase();
-  s = s.replace(/\s+(v|version)?\d+(\.\d+)*\s*$/, '');
-  return s.replace(/[^a-z0-9]/g, '');
-}
+const BRIDGE = META.farm.bridgeTable;
+const BRIDGE_DEFAULT = META.farm.bridgeDefaultUsd;
 
 function momentumFactor(change7d) {
   const change = change7d === null || change7d === undefined ? 0 : change7d / 100;
-  return Math.min(1.4, Math.max(0.6, 1 + 0.5 * change));
+  return Math.min(1.4, Math.max(0.6, 1 + 0.1 * change));
 }
 
 function recordDays(listedAt) {
@@ -87,7 +83,7 @@ function recordDays(listedAt) {
 
 function recordFactor(listedAt) {
   const days = recordDays(listedAt);
-  return 0.7 + 0.3 * (Math.min(days, 730) / 730);
+  return 0.85 + 0.15 * (Math.min(days, 730) / 730);
 }
 
 function cheapestChain(chains) {
@@ -105,21 +101,21 @@ function cheapestChain(chains) {
 
 function recompute(row) {
   const peers = row.category !== null ? (META.model.peers[row.category] ?? 1) : 1;
-  const kin = META.model.tradedStems.includes(nameStem(row.name)) ? 0.5 : 1;
   const implied =
     10 ** META.model.a *
     row.tvl_usd ** META.model.b *
     peers *
     momentumFactor(row.change_7d) *
-    recordFactor(row.listed_at) *
-    kin;
+    recordFactor(row.listed_at);
   const slice = (0.1 * implied * META.farm.depositUsd) / row.tvl_usd;
   const { chain, perTx } = cheapestChain(row.chains);
   const gas = META.farm.gasTxCount * perTx;
+  const bridge = BRIDGE[chain] ?? BRIDGE_DEFAULT;
   const net = slice - gas - META.farm.oppCostUsd;
+  const netAfterBridge = net - bridge;
   const netH = net / META.farm.activeHours;
   const verdict = netH >= 5 ? 'FARM' : net >= 0 ? 'THIN' : 'SKIP';
-  return { implied, peers, kin, slice, gas, gasChain: chain, perTx, net, netH, verdict };
+  return { implied, peers, slice, gas, gasChain: chain, perTx, bridge, net, netAfterBridge, netH, verdict };
 }
 
 // ---------------------------------------------------------------- state
@@ -228,6 +224,14 @@ function renderEarly() {
     .join('');
 }
 
+function renderHero() {
+  const farms = rows.filter((r) => r.verdict === 'FARM');
+  if (farms.length === 0) return;
+  const best = farms.sort((a, b) => b.net_per_hour_usd - a.net_per_hour_usd)[0];
+  const hero = $('#hero');
+  hero.innerHTML = `Farm next: <b>${escapeHtml(best.name)}</b> &mdash; ${fmtMoney(best.net_per_hour_usd)}/h net &middot; FARM &middot; ${escapeHtml(best.category ?? 'Uncategorized')}, ${fmtUsd(best.tvl_usd)} TVL, no token for ${fmtDays(best.days_no_token)}`;
+}
+
 function renderOos() {
   const o = META.oos.loo;
   const pct = (x) => `${Math.round(x * 100)}%`;
@@ -312,6 +316,8 @@ function fillMeta() {
   set('testN', String(m.oos.timeSplit.testN));
   set('tsMiss', m.oos.timeSplit.medianMiss.toFixed(2));
   set('tsFlat', m.oos.timeSplit.flatMedianMiss.toFixed(2));
+  set('tsRank', m.oos.timeSplit.rankCorr.toFixed(2));
+  set('tsFlatRank', m.oos.timeSplit.flatRankCorr.toFixed(2));
   set('seed', String(m.model.bootstrap.seed));
   set('aMean', m.model.bootstrap.aMean.toFixed(3));
   set('aSd', m.model.bootstrap.aSd.toFixed(3));
@@ -350,7 +356,6 @@ function openDetail(slug) {
       <div><dt>Peers (${escapeHtml(r.category ?? 'Uncategorized')})</dt><dd>${fmtFactor(c.peers)}</dd></div>
       <div><dt>Momentum (7D ${fmtChange(r.change_7d)})</dt><dd>${fmtFactor(r.momentum)}</dd></div>
       <div><dt>Record (${fmtDays(r.days_no_token)} no token)</dt><dd>${fmtFactor(r.record)}</dd></div>
-      <div><dt>Kin (sibling token)</dt><dd>${fmtFactor(c.kin)}</dd></div>
       <div class="total"><dt>Implied value</dt><dd>${fmtUsd(r.implied_value_usd)}</dd></div>
       <div><dt>P25 – P75 band</dt><dd>${fmtUsd(r.p25_usd)} – ${fmtUsd(r.p75_usd)}</dd></div>
     </dl>
@@ -359,6 +364,10 @@ function openDetail(slug) {
       <div><dt>Gas (4 tx on ${escapeHtml(r.gas_chain)}, $${r.gas_per_tx_usd.toFixed(2)} each)</dt><dd>-${fmtMoney(r.gas_usd).slice(1)}</dd></div>
       <div><dt>T-bill yield given up (60 days)</dt><dd>-$${META.farm.oppCostUsd.toFixed(2)}</dd></div>
       <div class="total"><dt>Net</dt><dd>${fmtMoney(r.net_usd)}</dd></div>
+      <div><dt>Bridge in (from Ethereum, not in net)</dt><dd>-$${r.bridge_usd.toFixed(2)}</dd></div>
+      <div><dt>Net after the bridge</dt><dd>${fmtMoney(r.net_after_bridge_usd)}</dd></div>
+      <div><dt>Net if the launch is half the implied value</dt><dd>${fmtMoney(r.slice_usd / 2 - r.gas_usd - META.farm.oppCostUsd)}</dd></div>
+      <div><dt>Net if the launch is twice the implied value</dt><dd>${fmtMoney(r.slice_usd * 2 - r.gas_usd - META.farm.oppCostUsd)}</dd></div>
       <div><dt>Net per active hour (2 h)</dt><dd>${fmtMoney(r.net_per_hour_usd)}/h</dd></div>
       <div><dt>Break-even launch odds</dt><dd>${Math.round(r.break_even_odds * 100)}%</dd></div>
       <div class="total"><dt>Verdict</dt><dd><span class="verdict ${verdictClass(r.verdict)}">${r.verdict}</span></dd></div>
@@ -371,7 +380,7 @@ function openDetail(slug) {
     panel.classList.add('hidden');
     if (location.hash.startsWith('#detail=')) history.replaceState(null, '', location.pathname + location.search);
   });
-  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  panel.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 // ---------------------------------------------------------------- tabs, filters, sorting
@@ -387,6 +396,8 @@ function applyHash() {
   const hash = new URLSearchParams(location.hash.slice(1));
   const detail = hash.get('detail');
   const verdict = hash.get('verdict');
+  const tab = hash.get('tab');
+  if (tab && ['board', 'early', 'method'].includes(tab)) showTab(tab);
   if (verdict && ['FARM', 'THIN', 'SKIP'].includes(verdict)) {
     $('#f-verdict').value = verdict;
     showTab('board');
@@ -501,6 +512,7 @@ async function boot() {
     initControls();
     renderTable();
     renderEarly();
+    renderHero();
     applyHash();
   } catch (err) {
     $('#tbody').innerHTML = `<tr><td colspan="10">Could not load board.json: ${escapeHtml(err.message)}</td></tr>`;

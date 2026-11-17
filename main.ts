@@ -29,6 +29,8 @@ import { buildDossier } from './vendor/makefun-board.ts';
 import {
   ACTIVE_HOURS,
   BOARD_MAX_ROWS,
+  BRIDGE_DEFAULT_USD,
+  BRIDGE_TABLE,
   DEPOSIT_USD,
   GAS_DEFAULT_PER_TX,
   GAS_TABLE,
@@ -154,7 +156,6 @@ function buildDataJs(
       setAside: board.setAside,
       earlyFinds: board.earlyFinds,
       comps: fit.comps.length,
-      kinHits: board.rows.filter((r) => r.kin < 1).length,
     },
     verdicts: board.verdicts,
     model: {
@@ -165,7 +166,6 @@ function buildDataJs(
       b: fit.b,
       rSquared: round(fit.rSquared, 3),
       peers: fit.peers,
-      tradedStems: fit.tradedStems,
       bandLo: oos.loo.bandLo,
       bandHi: oos.loo.bandHi,
       bootstrap: {
@@ -194,6 +194,8 @@ function buildDataJs(
         medianMiss: round(oos.timeSplit.medianMiss, 2),
         within3: round(oos.timeSplit.within3, 2),
         flatMedianMiss: round(oos.timeSplit.flatMedianMiss, 2),
+        rankCorr: round(oos.timeSplit.rankCorr, 2),
+        flatRankCorr: round(oos.timeSplit.flatRankCorr, 2),
       },
     },
     farm: {
@@ -204,6 +206,8 @@ function buildDataJs(
       gasTxCount: GAS_TX_COUNT,
       gasTable: GAS_TABLE,
       gasDefaultPerTx: GAS_DEFAULT_PER_TX,
+      bridgeTable: BRIDGE_TABLE,
+      bridgeDefaultUsd: BRIDGE_DEFAULT_USD,
     },
     digest,
     compsPoints: fit.comps.map((p) => [
@@ -298,7 +302,7 @@ function main(): void {
   console.log(`snapshot   ${snapshot.as_of} · ${fmt(snapshot.protocols.length)} protocols · floor $${fmt(snapshot.floor_usd)}`);
   console.log(`fit        implied = 10^${fit.a.toFixed(4)} x TVL^${fit.b.toFixed(4)} · R2 ${fit.rSquared.toFixed(3)} · ${fit.comps.length} comps`);
   console.log(`loo        median miss x${oos.loo.medianMiss.toFixed(2)} (flat x${oos.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.loo.within3 * 100).toFixed(0)}% (flat ${(oos.loo.flatWithin3 * 100).toFixed(0)}%) · rank corr ${oos.loo.rankCorr.toFixed(2)} (flat ${oos.loo.flatRankCorr.toFixed(2)}) · band x${oos.loo.bandLo.toFixed(2)}-x${oos.loo.bandHi.toFixed(2)}`);
-  console.log(`time split fit ${oos.timeSplit.trainN} pre-2024, test ${oos.timeSplit.testN} newer · median miss x${oos.timeSplit.medianMiss.toFixed(2)} (flat x${oos.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.timeSplit.within3 * 100).toFixed(0)}%`);
+  console.log(`time split fit ${oos.timeSplit.trainN} pre-2024, test ${oos.timeSplit.testN} newer · median miss x${oos.timeSplit.medianMiss.toFixed(2)} (flat x${oos.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.timeSplit.within3 * 100).toFixed(0)}% · rank corr ${oos.timeSplit.rankCorr.toFixed(2)} (flat ${oos.timeSplit.flatRankCorr.toFixed(2)})`);
   console.log(`bootstrap  ${oos.bootstrap.rounds} rounds seed ${oos.bootstrap.seed} · a ${oos.bootstrap.aMean.toFixed(3)} ± ${oos.bootstrap.aSd.toFixed(3)} · b ${oos.bootstrap.bMean.toFixed(3)} ± ${oos.bootstrap.bSd.toFixed(3)}`);
   console.log(`board      ${board.rows.length} rows · watchlist ${board.watchlistCovered}/${snapshot.watchlist.length} · early finds ${board.earlyFinds} · set aside ${board.setAside} · FARM ${board.verdicts.FARM} / THIN ${board.verdicts.THIN} / SKIP ${board.verdicts.SKIP}`);
   const farmNextTop = board.rows

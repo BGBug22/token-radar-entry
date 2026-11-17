@@ -2,19 +2,31 @@
 //
 // A pre-token protocol's implied value is fitted from the snapshot's own
 // traded tokens: an OLS size curve on log10 market cap vs log10 TVL,
-// shrunk per-category offsets, a momentum term from the 7-day TVL change,
-// a record term for how long the protocol has run with no token, and a kin
-// term for siblings whose token already trades. Nothing is hardcoded by
-// name: every number below follows from the snapshot's figures.
+// shrunk per-category offsets, a small momentum term from the 7-day TVL
+// change, and a record term for how long the protocol has run with no
+// token. Nothing is hardcoded by name: every number below follows from
+// the snapshot's figures.
 //
-//   implied = 10^a x TVL^b x Peers x Momentum x Record x Kin
+//   implied = 10^a x TVL^b x Peers x Momentum x Record
 //
 // The farm plan prices a $1,000 deposit held 60 days: a 10% slice of the
 // implied launch, pro rata, minus gas (4 transactions on the cheapest
 // chain) and the $6.58 a 4% T-bill would have paid on the $1,000.
 // FARM when the net covers $5 an hour of the 2 active hours the plan
 // takes; THIN when the net is non-negative but below that; SKIP when
-// the net is negative.
+// the net is negative. The bridge that moves the $1,000 onto the
+// cheapest chain is priced beside the plan, not inside it: where the
+// money starts is the reader's, not the radar's, to know.
+//
+// What the leave-one-out says about each factor (128 comps, full grid
+// in analysis/ablation-grid.json): the 7-day change is mostly noise, so
+// it carries a tenth of the weight v3 gave it (rank corr 0.401 -> 0.409,
+// median miss x3.52 -> x3.46); the record floor rose 0.70 -> 0.85 and
+// the peer shrinkage rose to 40 pseudo-peers (time-split miss x2.94 ->
+// x2.72, within 3x 51% -> 53%). A median slope and a Huber fit were
+// tested and did not beat OLS out of sample. Kin was tested and is not
+// in the model: no pre-token protocol in the snapshot shares a name stem
+// with a traded token (0 of 342), so the factor never fires.
 //
 // All of this is pure and deterministic: the same snapshot bytes give
 // the same board bytes, every run. No network, no clock, no randomness
@@ -61,14 +73,15 @@ export interface BoardRow {
   peers: number;
   momentum: number;
   record: number;
-  kin: number;
   p25_usd: number;
   p75_usd: number;
   slice_usd: number;
   gas_usd: number;
   gas_chain: string;
   gas_per_tx_usd: number;
+  bridge_usd: number;
   net_usd: number;
+  net_after_bridge_usd: number;
   net_per_hour_usd: number;
   verdict: Verdict;
   break_even_odds: number;
@@ -80,7 +93,6 @@ export interface Fit {
   rSquared: number;
   peers: Record<string, number>;
   comps: Protocol[];
-  tradedStems: string[];
 }
 
 export interface Oos {
@@ -102,6 +114,8 @@ export interface Oos {
     medianMiss: number;
     within3: number;
     flatMedianMiss: number;
+    rankCorr: number;
+    flatRankCorr: number;
   };
   bootstrap: {
     rounds: number;
@@ -123,12 +137,14 @@ export const OPP_COST_USD = 6.58;
 export const ACTIVE_HOURS = 2;
 /** A farm must clear this net per active hour. */
 export const FARM_NET_PER_HOUR = 5;
+/** The 7-day TVL change's weight in the momentum factor: a tenth. */
+export const MOMENTUM_COEF = 0.1;
 /** Pseudo-peers the category offsets are shrunk toward zero with. */
-export const PSEUDO_PEERS = 20;
+export const PSEUDO_PEERS = 40;
 /** The record term reaches 1.00 after this many days with no token. */
 export const RECORD_DAYS_CAP = 730;
 /** The record term's floor for a protocol with no days on record. */
-export const RECORD_MIN = 0.7;
+export const RECORD_MIN = 0.85;
 /** Board rows: the watchlist plus the largest pre-token protocols below it. */
 export const BOARD_MAX_ROWS = 198;
 export const BOOTSTRAP_ROUNDS = 200;
@@ -145,10 +161,38 @@ export const GAS_TABLE: Record<string, number> = {
   Bitcoin: 1.5,
   Solana: 0.01,
   Base: 0.01,
+  Arbitrum: 0.05,
+  Optimism: 0.05,
+  Polygon: 0.01,
+  Avalanche: 0.05,
+  BSC: 0.03,
+  zkSync: 0.05,
+  Linea: 0.02,
 };
 export const GAS_DEFAULT_PER_TX = 0.05;
 /** Four transactions make a farm: approve, deposit, withdraw, claim. */
 export const GAS_TX_COUNT = 4;
+
+/**
+ * What bridging $1,000 of USDC onto a chain typically costs from
+ * Ethereum (November 2026 medians, whole dollars). It is priced beside
+ * the farm, not inside it: the plan counts the deposit arriving on the
+ * cheapest chain, and the reader's starting chain is their own. An
+ * unlisted chain costs the default.
+ */
+export const BRIDGE_TABLE: Record<string, number> = {
+  Ethereum: 0,
+  Solana: 1,
+  Base: 3,
+  Arbitrum: 3,
+  Optimism: 3,
+  Polygon: 1,
+  Avalanche: 2,
+  BSC: 1,
+  zkSync: 3,
+  Linea: 3,
+};
+export const BRIDGE_DEFAULT_USD = 3;
 
 // ---------------------------------------------------------------- small tools
 
@@ -272,18 +316,6 @@ export function isExcluded(p: Protocol): boolean {
   return false;
 }
 
-/** The protocol's name reduced to a stem, for sibling detection. */
-export function nameStem(name: string): string {
-  let s = name.toLowerCase();
-  s = s.replace(/\s+(v|version)?\d+(\.\d+)*\s*$/, '');
-  return s.replace(/[^a-z0-9]/g, '');
-}
-
-/** Half price when a sibling under the same stem already trades. */
-export function kinFactor(p: Protocol, tradedStems: Set<string>): number {
-  return tradedStems.has(nameStem(p.name)) ? 0.5 : 1;
-}
-
 // ---------------------------------------------------------------- the fit
 
 /** The traded comps: protocols whose market cap the snapshot records. */
@@ -347,16 +379,15 @@ export function fitModel(protocols: Protocol[]): Fit {
   const comps = tradedComps(protocols);
   const { a, b, rSquared } = olsFit(comps);
   const peers = peerOffsets(comps, a, b);
-  const tradedStems = comps.map((p) => nameStem(p.name));
-  return { a, b, rSquared, peers, comps, tradedStems };
+  return { a, b, rSquared, peers, comps };
 }
 
 // ---------------------------------------------------------------- the factors
 
-/** 1 + half the 7-day TVL change, clamped to [0.6, 1.4]. No change: 1. */
+/** 1 + a tenth of the 7-day TVL change, clamped to [0.6, 1.4]. No change: 1. */
 export function momentumFactor(p: Protocol): number {
   const change = p.change_7d === null ? 0 : p.change_7d / 100;
-  return Math.min(1.4, Math.max(0.6, 1 + 0.5 * change));
+  return Math.min(1.4, Math.max(0.6, 1 + MOMENTUM_COEF * change));
 }
 
 /** Days the protocol has run with no token, to the snapshot's date. */
@@ -368,7 +399,7 @@ export function recordDays(p: Protocol, asOf: string): number {
   return Math.max(0, days);
 }
 
-/** 0.70 rising linearly to 1.00 over RECORD_DAYS_CAP days with no token. */
+/** 0.85 rising linearly to 1.00 over RECORD_DAYS_CAP days with no token. */
 export function recordFactor(p: Protocol, asOf: string): number {
   const days = recordDays(p, asOf);
   return RECORD_MIN + (1 - RECORD_MIN) * (Math.min(days, RECORD_DAYS_CAP) / RECORD_DAYS_CAP);
@@ -382,13 +413,11 @@ export function baseValue(tvlUsd: number, a: number, b: number): number {
 /** The full implied value of one protocol under a fitted model. */
 export function impliedValue(p: Protocol, fit: Fit, asOf: string): number {
   const peers = p.category !== null ? (fit.peers[p.category] ?? 1) : 1;
-  const stems = new Set(fit.tradedStems);
   return (
     baseValue(p.tvl_usd, fit.a, fit.b) *
     peers *
     momentumFactor(p) *
-    recordFactor(p, asOf) *
-    kinFactor(p, stems)
+    recordFactor(p, asOf)
   );
 }
 
@@ -413,35 +442,45 @@ export interface Farm {
   gasUsd: number;
   gasChain: string;
   gasPerTxUsd: number;
+  bridgeUsd: number;
   netUsd: number;
+  netAfterBridgeUsd: number;
   netPerHourUsd: number;
   verdict: Verdict;
   breakEvenOdds: number;
+}
+
+/** What bridging $1,000 of USDC onto a chain typically costs from Ethereum. */
+export function bridgeCost(chain: string): number {
+  return BRIDGE_TABLE[chain] ?? BRIDGE_DEFAULT_USD;
 }
 
 /**
  * Price the $1,000, 60-day farm of one protocol at an implied value:
  * a 10% slice of the launch, pro rata, minus gas and the T-bill yield
  * the $1,000 gives up. The break-even odds are the launch chance at
- * which the plan pays for itself: costs divided by the slice.
+ * which the plan pays for itself: costs divided by the slice. The bridge
+ * onto the cheapest chain is priced beside the net, not inside it.
  */
 export function farmFor(p: Protocol, impliedUsd: number): Farm {
   const sliceUsd = (0.1 * impliedUsd * DEPOSIT_USD) / p.tvl_usd;
   const { chain, perTx } = cheapestChain(p);
   const gasUsd = GAS_TX_COUNT * perTx;
+  const bridgeUsd = bridgeCost(chain);
   const netUsd = sliceUsd - gasUsd - OPP_COST_USD;
+  const netAfterBridgeUsd = netUsd - bridgeUsd;
   const netPerHourUsd = netUsd / ACTIVE_HOURS;
   const verdict: Verdict =
     netPerHourUsd >= FARM_NET_PER_HOUR ? 'FARM' : netUsd >= 0 ? 'THIN' : 'SKIP';
   const breakEvenOdds = sliceUsd > 0 ? Math.min(1, (gasUsd + OPP_COST_USD) / sliceUsd) : 1;
-  return { sliceUsd, gasUsd, gasChain: chain, gasPerTxUsd: perTx, netUsd, netPerHourUsd, verdict, breakEvenOdds };
+  return { sliceUsd, gasUsd, gasChain: chain, gasPerTxUsd: perTx, bridgeUsd, netUsd, netAfterBridgeUsd, netPerHourUsd, verdict, breakEvenOdds };
 }
 
 /** The five concrete steps of the farm, with this protocol's own numbers. */
 export function farmSteps(p: Protocol, farm: Farm): string[] {
   const money = (x: number): string => `$${x.toFixed(2)}`;
   return [
-    `Move $1,000 in USDC to ${farm.gasChain}, the cheapest chain ${p.name} runs on. A bridge from anywhere else costs extra and is not counted in the plan below.`,
+    `Move $1,000 in USDC to ${farm.gasChain}, the cheapest chain ${p.name} runs on. Bridging it there from Ethereum costs about ${money(farm.bridgeUsd)} — counted beside the plan below, not inside it.`,
     `Approve USDC for ${p.name} on ${farm.gasChain} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas at November 2026 prices.`,
     `Deposit the $1,000 into ${p.name} on ${farm.gasChain} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas. This is the position that earns points if a token ever launches.`,
     `Hold for 60 days and check the position once a week, about 10 minutes a week (2 hours of hands-on time in total). Leave early only if TVL falls 30% in a week.`,
@@ -476,7 +515,6 @@ export function buildBoard(
   const candidates = snapshot.protocols.filter((p) => isNoToken(p) && !isExcluded(p));
   candidates.sort((x, y) => y.tvl_usd - x.tvl_usd);
   const chosen = candidates.slice(0, BOARD_MAX_ROWS);
-  const stems = new Set(fit.tradedStems);
 
   const rows: BoardRow[] = chosen.map((p) => {
     const implied = impliedValue(p, fit, snapshot.as_of);
@@ -500,14 +538,15 @@ export function buildBoard(
       peers: p.category !== null ? (fit.peers[p.category] ?? 1) : 1,
       momentum: momentumFactor(p),
       record: recordFactor(p, snapshot.as_of),
-      kin: kinFactor(p, stems),
       p25_usd: wholeUsd(implied * bandLo),
       p75_usd: wholeUsd(implied * bandHi),
       slice_usd: farm.sliceUsd,
       gas_usd: farm.gasUsd,
       gas_chain: farm.gasChain,
       gas_per_tx_usd: farm.gasPerTxUsd,
+      bridge_usd: farm.bridgeUsd,
       net_usd: farm.netUsd,
+      net_after_bridge_usd: farm.netAfterBridgeUsd,
       net_per_hour_usd: farm.netPerHourUsd,
       verdict: farm.verdict,
       break_even_odds: farm.breakEvenOdds,
@@ -603,7 +642,7 @@ export function looValidation(comps: Protocol[], asOf: string): LooOutcome {
 export function timeSplitValidation(
   comps: Protocol[],
   asOf: string,
-): { trainN: number; testN: number; medianMiss: number; within3: number; flatMedianMiss: number } {
+): { trainN: number; testN: number; medianMiss: number; within3: number; flatMedianMiss: number; rankCorr: number; flatRankCorr: number } {
   const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
   const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
   const { a, b } = olsFit(train);
@@ -612,10 +651,16 @@ export function timeSplitValidation(
   const medMultiple = median(multiples);
   const misses: number[] = [];
   const flatMisses: number[] = [];
+  const preds: number[] = [];
+  const flats: number[] = [];
+  const actual: number[] = [];
   for (const p of test) {
     const peer = p.category !== null ? (peers[p.category] ?? 1) : 1;
     const pred =
       baseValue(p.tvl_usd, a, b) * peer * momentumFactor(p) * recordFactor(p, asOf);
+    preds.push(pred);
+    flats.push(p.tvl_usd * medMultiple);
+    actual.push(p.mcap_usd!);
     misses.push(missRatio(pred, p.mcap_usd!));
     flatMisses.push(missRatio(p.tvl_usd * medMultiple, p.mcap_usd!));
   }
@@ -625,6 +670,8 @@ export function timeSplitValidation(
     medianMiss: median(misses),
     within3: misses.filter((m) => m <= 3).length / misses.length,
     flatMedianMiss: median(flatMisses),
+    rankCorr: spearman(preds, actual),
+    flatRankCorr: spearman(flats, actual),
   };
 }
 

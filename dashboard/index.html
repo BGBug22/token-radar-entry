@@ -23,9 +23,11 @@
   <div class="stat"><b data-stat="boardRows">198</b><span>pre-token ranked</span></div>
   <div class="stat"><b data-stat="comps">128</b><span>traded comps</span></div>
   <div class="stat"><b data-stat="setAside">560</b><span>set aside</span></div>
-  <div class="stat"><b data-stat="verdicts">130/54/14</b><span>farm / thin / skip</span></div>
-  <div class="stat"><b data-stat="loo">&times;3.52</b><span>LOO median miss</span></div>
+  <div class="stat"><b data-stat="verdicts">141/43/14</b><span>farm / thin / skip</span></div>
+  <div class="stat"><b data-stat="loo">&times;3.41</b><span>LOO median miss</span></div>
 </section>
+
+<p id="hero" class="hero">Farm next: <b>alphagrowth</b> &mdash; +$26.82/h net &middot; FARM &middot; Risk Curators, $5.8M TVL, no token for 407 days</p>
 
 <p id="badge" class="badge pending">checking the page against board.json&hellip;</p>
 
@@ -94,24 +96,24 @@
 
     <div id="panel-method" class="panel hidden">
       <h2>How a row is valued</h2>
-      <p class="formula">implied = 10<sup data-meta="a">3.0247</sup> &times; TVL<sup data-meta="b">0.5223</sup> &times; Peers &times; Momentum &times; Record &times; Kin</p>
+      <p class="formula">implied = 10<sup data-meta="a">3.0247</sup> &times; TVL<sup data-meta="b">0.5223</sup> &times; Peers &times; Momentum &times; Record</p>
       <p>The size curve is an OLS fit on log<sub>10</sub> market cap against log<sub>10</sub> TVL over the snapshot&rsquo;s <span data-meta="comps">128</span> traded tokens (R&sup2; <span data-meta="r2">0.19</span>). The curve is honest about what it does not explain: most of a token&rsquo;s launch value is not its TVL. The factors bend the curve, they do not replace it.</p>
       <dl>
         <dt>Peers</dt>
-        <dd>Each category&rsquo;s mean log residual, shrunk toward zero with 20 pseudo-peers. Liquid Staking pays &times;0.74, Prediction Market &times;1.37. A category with no traded comps gets no offset.</dd>
+        <dd>Each category&rsquo;s mean log residual, shrunk toward zero with 40 pseudo-peers. Liquid Staking pays &times;0.84, Basis Trading &times;1.18. A category with no traded comps gets no offset. The shrinkage was tested at 4, 8, 12, 20 and 40: 40 wins the time split, 8 and 4 lose on both validations.</dd>
         <dt>Momentum</dt>
-        <dd>1 + half the 7-day TVL change, clamped to [0.6, 1.4]. A protocol growing 20% in a week is worth 10% more; one shrinking 20% is worth 10% less. No change recorded counts as no change.</dd>
+        <dd>1 + a tenth of the 7-day TVL change, clamped to [0.6, 1.4]. A protocol growing 20% in a week is worth 2% more; one shrinking 20% is worth 2% less. No change recorded counts as no change. The 7-day change is mostly noise &mdash; the leave-one-out says it deserves a tenth of the weight it used to carry.</dd>
         <dt>Record</dt>
-        <dd>0.70 rising linearly to 1.00 over 730 days running with no token. A protocol listed two years ago with no token has survived two years of chances to launch one. An unknown listing date counts as 365 days.</dd>
+        <dd>0.85 rising linearly to 1.00 over 730 days running with no token. A protocol listed two years ago with no token has survived two years of chances to launch one. An unknown listing date counts as 365 days.</dd>
         <dt>Kin</dt>
-        <dd>&times;0.5 when a sibling under the same name stem already trades. No board row hits it.</dd>
+        <dd>Tested and not in the model: no pre-token protocol in the snapshot shares a name stem with a traded token (0 of 342), so the factor never fires and stays out rather than flattering the formula.</dd>
         <dt>Breadth</dt>
-        <dd>Chain count was tested and is <em>not</em> in the model: adding it did not improve the out-of-sample miss, so it stays out rather than flattering the fit.</dd>
+        <dd>Chain count was tested and is <em>not</em> in the model: adding it did not improve the out-of-sample miss, so it stays out rather than flattering the fit. A median slope and a Huber fit were tested too and did not beat OLS out of sample.</dd>
       </dl>
       <h2>The farm, priced</h2>
-      <p>Deposit $1,000, hold 60 days. The slice is 10% of the implied launch, pro rata: 0.10 &times; implied &times; $1,000 / TVL. Costs are gas for 4 transactions on the protocol&rsquo;s cheapest chain plus $6.58 &mdash; what a 4% T-bill pays on $1,000 over 60 days. FARM when the net clears $5 an hour of the 2 active hours the plan takes; THIN when the net is non-negative but below that; SKIP when the net is negative. Break-even odds are costs divided by the slice: the launch chance at which the plan pays for itself.</p>
+      <p>Deposit $1,000, hold 60 days. The slice is 10% of the implied launch, pro rata: 0.10 &times; implied &times; $1,000 / TVL. Costs are gas for 4 transactions on the protocol&rsquo;s cheapest chain plus $6.58 &mdash; what a 4% T-bill pays on $1,000 over 60 days. FARM when the net clears $5 an hour of the 2 active hours the plan takes; THIN when the net is non-negative but below that; SKIP when the net is negative. Break-even odds are costs divided by the slice: the launch chance at which the plan pays for itself. The bridge that moves the $1,000 onto the cheapest chain costs about $0 on Ethereum, $1 on Solana, Polygon or BSC, $2 on Avalanche and $3 on Base, Arbitrum, Optimism, zkSync or Linea &mdash; priced beside each plan, not inside it, because where the money starts is the reader&rsquo;s to know. Each row&rsquo;s detail shows the net after the bridge, and the net if the launch comes in at half or twice the implied value.</p>
       <h2>Out of sample</h2>
-      <p>Leave-one-out over the <span data-meta="comps">128</span> comps: median miss &times;<span data-meta="looMiss">3.52</span>, within 3&times; <span data-meta="looWithin3">46</span>%, within 10&times; <span data-meta="looWithin10">77</span>%, rank correlation <span data-meta="looRank">0.40</span>. A flat multiple (median market-cap-to-TVL, no curve) misses by &times;<span data-meta="flatMiss">5.07</span>. The curve wins on level, not on ranking &mdash; the flat multiple ranks marginally better (<span data-meta="flatRank">0.42</span>). Time split: fit on the <span data-meta="trainN">44</span> comps listed before 2024, test on the <span data-meta="testN">51</span> newer ones &mdash; median miss &times;<span data-meta="tsMiss">2.94</span> against &times;<span data-meta="tsFlat">5.20</span> flat. Bootstrap, 200 rounds, seed <span data-meta="seed">20261114</span>: a = <span data-meta="aMean">3.018</span> &plusmn; <span data-meta="aSd">0.643</span>, b = <span data-meta="bMean">0.522</span> &plusmn; <span data-meta="bSd">0.081</span>. Each row&rsquo;s P25&ndash;P75 band is the implied value times the leave-one-out residual band, &times;<span data-meta="bandLo">0.36</span> to &times;<span data-meta="bandHi">4.70</span>.</p>
+      <p>Leave-one-out over the <span data-meta="comps">128</span> comps: median miss &times;<span data-meta="looMiss">3.41</span>, within 3&times; <span data-meta="looWithin3">46</span>%, within 10&times; <span data-meta="looWithin10">77</span>%, rank correlation <span data-meta="looRank">0.41</span>. A flat multiple (median market-cap-to-TVL, no curve) misses by &times;<span data-meta="flatMiss">5.07</span>. The curve wins on level; on ranking it still trails the flat multiple (<span data-meta="flatRank">0.42</span>), by less than before. Time split: fit on the <span data-meta="trainN">44</span> comps listed before 2024, test on the <span data-meta="testN">51</span> newer ones &mdash; median miss &times;<span data-meta="tsMiss">2.72</span> against &times;<span data-meta="tsFlat">5.20</span> flat, rank correlation <span data-meta="tsRank">0.34</span> against <span data-meta="tsFlatRank">0.35</span> flat. Bootstrap, 200 rounds, seed <span data-meta="seed">20261114</span>: a = <span data-meta="aMean">3.018</span> &plusmn; <span data-meta="aSd">0.643</span>, b = <span data-meta="bMean">0.522</span> &plusmn; <span data-meta="bSd">0.081</span>. Each row&rsquo;s P25&ndash;P75 band is the implied value times the leave-one-out residual band, &times;<span data-meta="bandLo">0.34</span> to &times;<span data-meta="bandHi">4.41</span>. By category, the model ranks RWA best (rank correlation 0.72, median miss &times;1.79) and Bridge next (0.94); its worst miss is one comp, Rain, a prediction-market token worth &times;1,089 the curve &mdash; the snapshot&rsquo;s own outlier, kept in the fit rather than cut out.</p>
       <h2>What this is not</h2>
       <p>The implied value is this radar&rsquo;s own claim, fitted from one snapshot &mdash; not a forecast, not a price, and not a promise that a token will ever launch. Most pre-token protocols never launch one. Real airdrops never ask for a seed phrase, a private key, or money up front.</p>
     </div>
@@ -139,7 +141,7 @@
     </section>
     <section class="card">
       <h2>How a row is valued</h2>
-      <p class="formula small">implied = 10<sup>a</sup> &times; TVL<sup>b</sup> &times; Peers &times; Momentum &times; Record &times; Kin</p>
+      <p class="formula small">implied = 10<sup>a</sup> &times; TVL<sup>b</sup> &times; Peers &times; Momentum &times; Record</p>
       <p class="note">a = <span data-meta="a">3.0247</span>, b = <span data-meta="b">0.5223</span>, fitted on the snapshot&rsquo;s traded tokens. Full method in the Method tab.</p>
     </section>
   </aside>
