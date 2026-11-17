@@ -12,10 +12,12 @@
 // The farm plan prices a $1,000 deposit held 60 days: a 10% slice of the
 // implied launch, pro rata, minus gas (4 transactions on the cheapest
 // chain) and the $6.58 a 4% T-bill would have paid on the $1,000.
-// FARM when the net covers $5 an hour of the 2 active hours the plan
-// takes; THIN when the net is non-negative but below that; SKIP when
-// the net is negative. The bridge that moves the $1,000 onto the
-// cheapest chain is priced beside the plan, not inside it: where the
+// FARM only when the net at HALF the implied value — the launch coming
+// in at half what the curve says — still clears $10: the old $5-an-hour
+// bar let 141 of 198 rows through, most of them one haircut from THIN.
+// THIN when the point-estimate net is non-negative but below that bar;
+// SKIP when the net is negative. The bridge that moves the $1,000 onto
+// the cheapest chain is priced beside the plan, not inside it: where the
 // money starts is the reader's, not the radar's, to know.
 //
 // What the leave-one-out says about each factor (128 comps, full grid
@@ -81,6 +83,7 @@ export interface BoardRow {
   gas_per_tx_usd: number;
   bridge_usd: number;
   net_usd: number;
+  net_half_usd: number;
   net_after_bridge_usd: number;
   net_per_hour_usd: number;
   verdict: Verdict;
@@ -125,6 +128,48 @@ export interface Oos {
     bMean: number;
     bSd: number;
   };
+  /** The same checks on the board's own population: the 92 traded tokens that pass the board's exclusion rule. */
+  eligible: {
+    loo: {
+      medianMiss: number;
+      within3: number;
+      rankCorr: number;
+      flatMedianMiss: number;
+      flatWithin3: number;
+      flatRankCorr: number;
+    };
+    timeSplit: {
+      trainN: number;
+      testN: number;
+      medianMiss: number;
+      within3: number;
+      flatMedianMiss: number;
+      rankCorr: number;
+      flatRankCorr: number;
+    };
+  };
+  /** Expanding-window walk-forward: fit on tokens listed before each year, test on the next year's. */
+  walkForward: {
+    all: Walkforward;
+    eligible: Walkforward;
+  };
+}
+
+export interface WalkforwardFold {
+  year: number;
+  trainN: number;
+  testN: number;
+  medianMiss: number;
+  within3: number;
+  rankCorr: number;
+}
+
+export interface Walkforward {
+  folds: WalkforwardFold[];
+  pooledMedianMiss: number;
+  pooledWithin3: number;
+  pooledN: number;
+  flatPooledMedianMiss: number;
 }
 
 // ---------------------------------------------------------------- constants
@@ -135,8 +180,8 @@ export const HOLD_DAYS = 60;
 export const OPP_COST_USD = 6.58;
 /** Active hands-on hours across the 60-day hold (weekly 10-minute checks). */
 export const ACTIVE_HOURS = 2;
-/** A farm must clear this net per active hour. */
-export const FARM_NET_PER_HOUR = 5;
+/** A farm must clear this net when the launch comes in at half the implied value. */
+export const FARM_NET_HALF_USD = 10;
 /** The 7-day TVL change's weight in the momentum factor: a tenth. */
 export const MOMENTUM_COEF = 0.1;
 /** Pseudo-peers the category offsets are shrunk toward zero with. */
@@ -316,6 +361,12 @@ export function isExcluded(p: Protocol): boolean {
   return false;
 }
 
+/** The fields the value factors read: a traded comp or a board row both carry them. */
+export interface FactorInputs {
+  change_7d: number | null;
+  listed_at: string | null;
+}
+
 // ---------------------------------------------------------------- the fit
 
 /** The traded comps: protocols whose market cap the snapshot records. */
@@ -385,13 +436,13 @@ export function fitModel(protocols: Protocol[]): Fit {
 // ---------------------------------------------------------------- the factors
 
 /** 1 + a tenth of the 7-day TVL change, clamped to [0.6, 1.4]. No change: 1. */
-export function momentumFactor(p: Protocol): number {
+export function momentumFactor(p: FactorInputs): number {
   const change = p.change_7d === null ? 0 : p.change_7d / 100;
   return Math.min(1.4, Math.max(0.6, 1 + MOMENTUM_COEF * change));
 }
 
 /** Days the protocol has run with no token, to the snapshot's date. */
-export function recordDays(p: Protocol, asOf: string): number {
+export function recordDays(p: FactorInputs, asOf: string): number {
   if (p.listed_at === null) return 365;
   const listed = new Date(p.listed_at + 'T00:00:00Z').getTime();
   const at = new Date(asOf + 'T00:00:00Z').getTime();
@@ -400,7 +451,7 @@ export function recordDays(p: Protocol, asOf: string): number {
 }
 
 /** 0.85 rising linearly to 1.00 over RECORD_DAYS_CAP days with no token. */
-export function recordFactor(p: Protocol, asOf: string): number {
+export function recordFactor(p: FactorInputs, asOf: string): number {
   const days = recordDays(p, asOf);
   return RECORD_MIN + (1 - RECORD_MIN) * (Math.min(days, RECORD_DAYS_CAP) / RECORD_DAYS_CAP);
 }
@@ -444,6 +495,7 @@ export interface Farm {
   gasPerTxUsd: number;
   bridgeUsd: number;
   netUsd: number;
+  netHalfUsd: number;
   netAfterBridgeUsd: number;
   netPerHourUsd: number;
   verdict: Verdict;
@@ -468,12 +520,13 @@ export function farmFor(p: Protocol, impliedUsd: number): Farm {
   const gasUsd = GAS_TX_COUNT * perTx;
   const bridgeUsd = bridgeCost(chain);
   const netUsd = sliceUsd - gasUsd - OPP_COST_USD;
+  const netHalfUsd = sliceUsd / 2 - gasUsd - OPP_COST_USD;
   const netAfterBridgeUsd = netUsd - bridgeUsd;
   const netPerHourUsd = netUsd / ACTIVE_HOURS;
   const verdict: Verdict =
-    netPerHourUsd >= FARM_NET_PER_HOUR ? 'FARM' : netUsd >= 0 ? 'THIN' : 'SKIP';
+    netHalfUsd >= FARM_NET_HALF_USD ? 'FARM' : netUsd >= 0 ? 'THIN' : 'SKIP';
   const breakEvenOdds = sliceUsd > 0 ? Math.min(1, (gasUsd + OPP_COST_USD) / sliceUsd) : 1;
-  return { sliceUsd, gasUsd, gasChain: chain, gasPerTxUsd: perTx, bridgeUsd, netUsd, netAfterBridgeUsd, netPerHourUsd, verdict, breakEvenOdds };
+  return { sliceUsd, gasUsd, gasChain: chain, gasPerTxUsd: perTx, bridgeUsd, netUsd, netHalfUsd, netAfterBridgeUsd, netPerHourUsd, verdict, breakEvenOdds };
 }
 
 /** The five concrete steps of the farm, with this protocol's own numbers. */
@@ -546,6 +599,7 @@ export function buildBoard(
       gas_per_tx_usd: farm.gasPerTxUsd,
       bridge_usd: farm.bridgeUsd,
       net_usd: farm.netUsd,
+      net_half_usd: farm.netHalfUsd,
       net_after_bridge_usd: farm.netAfterBridgeUsd,
       net_per_hour_usd: farm.netPerHourUsd,
       verdict: farm.verdict,
@@ -711,5 +765,222 @@ export function validateModel(comps: Protocol[], asOf: string): Oos {
   const loo = looValidation(comps, asOf);
   const timeSplit = timeSplitValidation(comps, asOf);
   const bootstrap = bootstrapValidation(comps);
-  return { loo, timeSplit, bootstrap };
+  const eligible = {
+    loo: looValidationEligible(comps, asOf),
+    timeSplit: timeSplitValidationEligible(comps, asOf),
+  };
+  const walkForward = walkforwardValidation(comps, asOf);
+  return { loo, timeSplit, bootstrap, eligible, walkForward };
+}
+
+/** The comps the board itself could have ranked: traded tokens that pass the board's exclusion rule. */
+export function eligibleComps(comps: Protocol[]): Protocol[] {
+  return comps.filter((p) => !isExcluded(p));
+}
+
+/**
+ * Leave-one-out over the eligible comps only: each fold trains on all
+ * comps minus the held one, and is scored on the held eligible token.
+ * The flat multiple is the train set's median market-cap-to-TVL.
+ */
+export function looValidationEligible(
+  comps: Protocol[],
+  asOf: string,
+): {
+  medianMiss: number;
+  within3: number;
+  rankCorr: number;
+  flatMedianMiss: number;
+  flatWithin3: number;
+  flatRankCorr: number;
+} {
+  const test = eligibleComps(comps);
+  const preds: number[] = [];
+  const flats: number[] = [];
+  const actual: number[] = [];
+  for (const held of test) {
+    const train = comps.filter((p) => p !== held);
+    const { a, b } = olsFit(train);
+    const peers = peerOffsets(train, a, b);
+    const peer = held.category !== null ? (peers[held.category] ?? 1) : 1;
+    const pred =
+      baseValue(held.tvl_usd, a, b) * peer * momentumFactor(held) * recordFactor(held, asOf);
+    preds.push(pred);
+    const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
+    flats.push(held.tvl_usd * median(multiples));
+    actual.push(held.mcap_usd!);
+  }
+  const misses = preds.map((p, i) => missRatio(p, actual[i]!));
+  const flatMisses = flats.map((p, i) => missRatio(p, actual[i]!));
+  const within = (arr: number[], k: number): number =>
+    arr.filter((m) => m <= k).length / arr.length;
+  return {
+    medianMiss: median(misses),
+    within3: within(misses, 3),
+    rankCorr: spearman(preds, actual),
+    flatMedianMiss: median(flatMisses),
+    flatWithin3: within(flatMisses, 3),
+    flatRankCorr: spearman(flats, actual),
+  };
+}
+
+/**
+ * Time split on the eligible population: fit on all comps listed before
+ * 2024, test on the eligible comps listed in 2024 or later.
+ */
+export function timeSplitValidationEligible(
+  comps: Protocol[],
+  asOf: string,
+): {
+  trainN: number;
+  testN: number;
+  medianMiss: number;
+  within3: number;
+  flatMedianMiss: number;
+  rankCorr: number;
+  flatRankCorr: number;
+} {
+  const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
+  const test = eligibleComps(comps).filter(
+    (p) => p.listed_at !== null && p.listed_at >= '2024-01-01',
+  );
+  const { a, b } = olsFit(train);
+  const peers = peerOffsets(train, a, b);
+  const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
+  const medMultiple = median(multiples);
+  const misses: number[] = [];
+  const flatMisses: number[] = [];
+  const preds: number[] = [];
+  const flats: number[] = [];
+  const actual: number[] = [];
+  for (const p of test) {
+    const peer = p.category !== null ? (peers[p.category] ?? 1) : 1;
+    const pred =
+      baseValue(p.tvl_usd, a, b) * peer * momentumFactor(p) * recordFactor(p, asOf);
+    preds.push(pred);
+    flats.push(p.tvl_usd * medMultiple);
+    actual.push(p.mcap_usd!);
+    misses.push(missRatio(pred, p.mcap_usd!));
+    flatMisses.push(missRatio(p.tvl_usd * medMultiple, p.mcap_usd!));
+  }
+  return {
+    trainN: train.length,
+    testN: test.length,
+    medianMiss: median(misses),
+    within3: misses.filter((m) => m <= 3).length / misses.length,
+    flatMedianMiss: median(flatMisses),
+    rankCorr: spearman(preds, actual),
+    flatRankCorr: spearman(flats, actual),
+  };
+}
+
+function walkforwardOn(
+  trainPool: Protocol[],
+  testSet: Protocol[],
+  asOf: string,
+): Walkforward {
+  const folds: WalkforwardFold[] = [];
+  const pooled: number[] = [];
+  const flatPooled: number[] = [];
+  for (const cut of ['2022-01-01', '2023-01-01', '2024-01-01']) {
+    const year = Number(cut.slice(0, 4));
+    const next = `${year + 1}-01-01`;
+    const train = trainPool.filter((p) => p.listed_at !== null && p.listed_at < cut);
+    const test = testSet.filter(
+      (p) => p.listed_at !== null && p.listed_at >= cut && p.listed_at < next,
+    );
+    if (train.length < 10 || test.length < 3) continue;
+    const { a, b } = olsFit(train);
+    const peers = peerOffsets(train, a, b);
+    const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
+    const medMultiple = median(multiples);
+    const preds: number[] = [];
+    const flats: number[] = [];
+    const actual: number[] = [];
+    for (const p of test) {
+      const peer = p.category !== null ? (peers[p.category] ?? 1) : 1;
+      preds.push(
+        baseValue(p.tvl_usd, a, b) * peer * momentumFactor(p) * recordFactor(p, asOf),
+      );
+      flats.push(p.tvl_usd * medMultiple);
+      actual.push(p.mcap_usd!);
+    }
+    const misses = preds.map((pr, i) => missRatio(pr, actual[i]!));
+    folds.push({
+      year,
+      trainN: train.length,
+      testN: test.length,
+      medianMiss: median(misses),
+      within3: misses.filter((m) => m <= 3).length / misses.length,
+      rankCorr: spearman(preds, actual),
+    });
+    pooled.push(...misses);
+    flatPooled.push(...flats.map((f, i) => missRatio(f, actual[i]!)));
+  }
+  return {
+    folds,
+    pooledMedianMiss: median(pooled),
+    pooledWithin3: pooled.filter((m) => m <= 3).length / pooled.length,
+    pooledN: pooled.length,
+    flatPooledMedianMiss: median(flatPooled),
+  };
+}
+
+/**
+ * Walk-forward on both populations: fit on the tokens listed before
+ * each year, test on the next year's, expanding window. The eligible
+ * run trains on all comps and tests on the eligible ones only.
+ */
+export function walkforwardValidation(
+  comps: Protocol[],
+  asOf: string,
+): { all: Walkforward; eligible: Walkforward } {
+  return {
+    all: walkforwardOn(comps, comps, asOf),
+    eligible: walkforwardOn(comps, eligibleComps(comps), asOf),
+  };
+}
+
+/**
+ * Each board row's P5–P95 rank over the same 200 seeded bootstrap
+ * refits as the bootstrap panel: resample the comps with replacement,
+ * refit the curve and the peer offsets, re-rank the board, record.
+ */
+export function bootstrapRankRanges(
+  rows: BoardRow[],
+  comps: Protocol[],
+  asOf: string,
+): Array<[number, number]> {
+  const rand = mulberry32(BOOTSTRAP_SEED);
+  const ranks: number[][] = rows.map(() => []);
+  for (let r = 0; r < BOOTSTRAP_ROUNDS; r++) {
+    const sample: Protocol[] = [];
+    for (let i = 0; i < comps.length; i++) {
+      sample.push(comps[Math.floor(rand() * comps.length)]!);
+    }
+    const { a, b } = olsFit(sample);
+    const peers = peerOffsets(sample, a, b);
+    const vals = rows.map((row) => {
+      const peer = row.category !== null ? (peers[row.category] ?? 1) : 1;
+      return (
+        baseValue(row.tvl_usd, a, b) *
+        peer *
+        momentumFactor(row) *
+        recordFactor(row, asOf)
+      );
+    });
+    const order = rows.map((_, i) => i).sort((x, y) => {
+      if (vals[y]! !== vals[x]!) return vals[y]! - vals[x]!;
+      if (rows[y]!.tvl_usd !== rows[x]!.tvl_usd) return rows[y]!.tvl_usd - rows[x]!.tvl_usd;
+      return rows[x]!.slug < rows[y]!.slug ? -1 : 1;
+    });
+    order.forEach((idx, pos) => {
+      ranks[idx]!.push(pos + 1);
+    });
+  }
+  return ranks.map((rs) => {
+    const lo = Math.round(percentile(rs, 0.05));
+    const hi = Math.round(percentile(rs, 0.95));
+    return [lo, hi] as [number, number];
+  });
 }

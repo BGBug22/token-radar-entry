@@ -112,10 +112,11 @@ function recompute(row) {
   const gas = META.farm.gasTxCount * perTx;
   const bridge = BRIDGE[chain] ?? BRIDGE_DEFAULT;
   const net = slice - gas - META.farm.oppCostUsd;
+  const netHalf = slice / 2 - gas - META.farm.oppCostUsd;
   const netAfterBridge = net - bridge;
   const netH = net / META.farm.activeHours;
-  const verdict = netH >= 5 ? 'FARM' : net >= 0 ? 'THIN' : 'SKIP';
-  return { implied, peers, slice, gas, gasChain: chain, perTx, bridge, net, netAfterBridge, netH, verdict };
+  const verdict = netHalf >= META.farm.farmNetHalfUsd ? 'FARM' : net >= 0 ? 'THIN' : 'SKIP';
+  return { implied, peers, slice, gas, gasChain: chain, perTx, bridge, net, netHalf, netAfterBridge, netH, verdict };
 }
 
 // ---------------------------------------------------------------- state
@@ -234,12 +235,17 @@ function renderHero() {
 
 function renderOos() {
   const o = META.oos.loo;
+  const e = META.oos.eligible;
+  const w = META.oos.walkForward.eligible;
   const pct = (x) => `${Math.round(x * 100)}%`;
   $('#oos-body').innerHTML = [
     ['Median miss', `×${o.medianMiss.toFixed(2)}`, `×${o.flatMedianMiss.toFixed(2)}`],
     ['Within 3×', pct(o.within3), pct(o.flatWithin3)],
     ['Within 10×', pct(o.within10), pct(o.flatWithin10)],
     ['Rank corr', o.rankCorr.toFixed(2), o.flatRankCorr.toFixed(2)],
+    ['LOO · eligible 92', `×${e.loo.medianMiss.toFixed(2)}`, `×${e.loo.flatMedianMiss.toFixed(2)}`],
+    ['Time split · eligible 92', `×${e.timeSplit.medianMiss.toFixed(2)}`, `×${e.timeSplit.flatMedianMiss.toFixed(2)}`],
+    ['Walk-forward · pooled', `×${w.pooledMedianMiss.toFixed(2)}`, `×${w.flatPooledMedianMiss.toFixed(2)}`],
   ]
     .map(([label, curve, flat]) => `<tr><td>${label}</td><td class="num">${curve}</td><td class="num">${flat}</td></tr>`)
     .join('');
@@ -347,6 +353,7 @@ function openDetail(slug) {
     return;
   }
   const c = recompute(r);
+  const rr = META.rankRange.split(',')[r.rank - 1].split('-');
   const steps = r.farm_steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('');
   panel.innerHTML = `
     <h2>${escapeHtml(r.name)} <span class="tag ${r.is_watchlist ? 'tag-watch' : ''}">${r.is_watchlist ? 'watchlist' : ''}</span>${r.is_early ? ' <span class="tag tag-early">early</span>' : ''}</h2>
@@ -358,6 +365,7 @@ function openDetail(slug) {
       <div><dt>Record (${fmtDays(r.days_no_token)} no token)</dt><dd>${fmtFactor(r.record)}</dd></div>
       <div class="total"><dt>Implied value</dt><dd>${fmtUsd(r.implied_value_usd)}</dd></div>
       <div><dt>P25 – P75 band</dt><dd>${fmtUsd(r.p25_usd)} – ${fmtUsd(r.p75_usd)}</dd></div>
+      <div><dt>Rank over 200 refits</dt><dd>#${rr[0]}–#${rr[1]}</dd></div>
     </dl>
     <dl class="factors">
       <div><dt>Slice of the launch ($1,000 in)</dt><dd>${fmtMoney(r.slice_usd)}</dd></div>
@@ -367,6 +375,7 @@ function openDetail(slug) {
       <div><dt>Bridge in (from Ethereum, not in net)</dt><dd>-$${r.bridge_usd.toFixed(2)}</dd></div>
       <div><dt>Net after the bridge</dt><dd>${fmtMoney(r.net_after_bridge_usd)}</dd></div>
       <div><dt>Net if the launch is half the implied value</dt><dd>${fmtMoney(r.slice_usd / 2 - r.gas_usd - META.farm.oppCostUsd)}</dd></div>
+      <div><dt>FARM needs</dt><dd>half-value net ≥ $${META.farm.farmNetHalfUsd.toFixed(0)}</dd></div>
       <div><dt>Net if the launch is twice the implied value</dt><dd>${fmtMoney(r.slice_usd * 2 - r.gas_usd - META.farm.oppCostUsd)}</dd></div>
       <div><dt>Net per active hour (2 h)</dt><dd>${fmtMoney(r.net_per_hour_usd)}/h</dd></div>
       <div><dt>Break-even launch odds</dt><dd>${Math.round(r.break_even_odds * 100)}%</dd></div>

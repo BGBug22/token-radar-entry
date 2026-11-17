@@ -32,11 +32,13 @@ import {
   BRIDGE_DEFAULT_USD,
   BRIDGE_TABLE,
   DEPOSIT_USD,
+  FARM_NET_HALF_USD,
   GAS_DEFAULT_PER_TX,
   GAS_TABLE,
   GAS_TX_COUNT,
   HOLD_DAYS,
   OPP_COST_USD,
+  bootstrapRankRanges,
   buildBoard,
   fitModel,
   validateModel,
@@ -131,10 +133,11 @@ function buildDataJs(
   fit: ReturnType<typeof fitModel>,
   oos: ReturnType<typeof validateModel>,
   board: ReturnType<typeof buildBoard>,
+  rankRange: Array<[number, number]>,
   digest: string,
 ): string {
   const farmNext = board.rows
-    .filter((r) => r.is_watchlist)
+    .filter((r) => r.verdict === 'FARM')
     .sort((x, y) => y.net_per_hour_usd - x.net_per_hour_usd)
     .slice(0, 5)
     .map((r) => ({
@@ -197,12 +200,59 @@ function buildDataJs(
         rankCorr: round(oos.timeSplit.rankCorr, 2),
         flatRankCorr: round(oos.timeSplit.flatRankCorr, 2),
       },
+      eligible: {
+        loo: {
+          medianMiss: round(oos.eligible.loo.medianMiss, 2),
+          within3: round(oos.eligible.loo.within3, 2),
+          rankCorr: round(oos.eligible.loo.rankCorr, 2),
+          flatMedianMiss: round(oos.eligible.loo.flatMedianMiss, 2),
+          flatWithin3: round(oos.eligible.loo.flatWithin3, 2),
+          flatRankCorr: round(oos.eligible.loo.flatRankCorr, 2),
+        },
+        timeSplit: {
+          trainN: oos.eligible.timeSplit.trainN,
+          testN: oos.eligible.timeSplit.testN,
+          medianMiss: round(oos.eligible.timeSplit.medianMiss, 2),
+          within3: round(oos.eligible.timeSplit.within3, 2),
+          flatMedianMiss: round(oos.eligible.timeSplit.flatMedianMiss, 2),
+          rankCorr: round(oos.eligible.timeSplit.rankCorr, 2),
+          flatRankCorr: round(oos.eligible.timeSplit.flatRankCorr, 2),
+        },
+      },
+      walkForward: {
+        all: {
+          pooledMedianMiss: round(oos.walkForward.all.pooledMedianMiss, 2),
+          pooledWithin3: round(oos.walkForward.all.pooledWithin3, 2),
+          pooledN: oos.walkForward.all.pooledN,
+          flatPooledMedianMiss: round(oos.walkForward.all.flatPooledMedianMiss, 2),
+        },
+        eligible: {
+          // Compact arrays [year, trainN, testN, miss, within3, rankCorr]: the
+          // dossier text is capped, and a fold object per line costs ~5x this.
+          folds: oos.walkForward.eligible.folds.map((f) => [
+            f.year,
+            f.trainN,
+            f.testN,
+            round(f.medianMiss, 2),
+            round(f.within3, 2),
+            round(f.rankCorr, 2),
+          ]),
+          pooledMedianMiss: round(oos.walkForward.eligible.pooledMedianMiss, 2),
+          pooledWithin3: round(oos.walkForward.eligible.pooledWithin3, 2),
+          pooledN: oos.walkForward.eligible.pooledN,
+          flatPooledMedianMiss: round(oos.walkForward.eligible.flatPooledMedianMiss, 2),
+        },
+      },
     },
+    // One compact string "lo-hi,lo-hi,..." in board order: the pretty array
+    // costs ~3 KB of the capped dossier text, this costs ~1.4 KB.
+    rankRange: rankRange.map(([lo, hi]) => `${lo}-${hi}`).join(','),
     farm: {
       depositUsd: DEPOSIT_USD,
       holdDays: HOLD_DAYS,
       oppCostUsd: OPP_COST_USD,
       activeHours: ACTIVE_HOURS,
+      farmNetHalfUsd: FARM_NET_HALF_USD,
       gasTxCount: GAS_TX_COUNT,
       gasTable: GAS_TABLE,
       gasDefaultPerTx: GAS_DEFAULT_PER_TX,
@@ -211,12 +261,12 @@ function buildDataJs(
     },
     digest,
     compsPoints: fit.comps.map((p) => [
-      round(Math.log10(p.tvl_usd), 4),
-      round(Math.log10(p.mcap_usd!), 4),
+      round(Math.log10(p.tvl_usd), 3),
+      round(Math.log10(p.mcap_usd!), 3),
     ]),
     boardPoints: board.rows.map((r) => [
-      round(Math.log10(r.tvl_usd), 4),
-      round(Math.log10(r.implied_value_usd), 4),
+      round(Math.log10(r.tvl_usd), 3),
+      round(Math.log10(r.implied_value_usd), 3),
     ]),
     farmNext,
   };
@@ -261,6 +311,7 @@ function main(): void {
   const fit = fitModel(snapshot.protocols);
   const oos = validateModel(fit.comps, snapshot.as_of);
   const board = buildBoard(snapshot, fit, oos.loo.bandLo, oos.loo.bandHi);
+  const rankRange = bootstrapRankRanges(board.rows, fit.comps, snapshot.as_of);
   validateBoard(board.rows, snapshot.watchlist);
 
   mkdirSync(outDir, { recursive: true });
@@ -279,7 +330,7 @@ function main(): void {
   copyDirFresh(join(scriptDir, 'dashboard'), dashboardDir, DASHBOARD_FILES);
   writeFileSync(
     join(dashboardDir, 'data.js'),
-    buildDataJs(snapshot, fit, oos, board, digest),
+    buildDataJs(snapshot, fit, oos, board, rankRange, digest),
   );
 
   const shotDir = join(scriptDir, 'screenshots');
@@ -304,12 +355,19 @@ function main(): void {
   console.log(`loo        median miss x${oos.loo.medianMiss.toFixed(2)} (flat x${oos.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.loo.within3 * 100).toFixed(0)}% (flat ${(oos.loo.flatWithin3 * 100).toFixed(0)}%) · rank corr ${oos.loo.rankCorr.toFixed(2)} (flat ${oos.loo.flatRankCorr.toFixed(2)}) · band x${oos.loo.bandLo.toFixed(2)}-x${oos.loo.bandHi.toFixed(2)}`);
   console.log(`time split fit ${oos.timeSplit.trainN} pre-2024, test ${oos.timeSplit.testN} newer · median miss x${oos.timeSplit.medianMiss.toFixed(2)} (flat x${oos.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.timeSplit.within3 * 100).toFixed(0)}% · rank corr ${oos.timeSplit.rankCorr.toFixed(2)} (flat ${oos.timeSplit.flatRankCorr.toFixed(2)})`);
   console.log(`bootstrap  ${oos.bootstrap.rounds} rounds seed ${oos.bootstrap.seed} · a ${oos.bootstrap.aMean.toFixed(3)} ± ${oos.bootstrap.aSd.toFixed(3)} · b ${oos.bootstrap.bMean.toFixed(3)} ± ${oos.bootstrap.bSd.toFixed(3)}`);
+  console.log(`eligible   92 comps pass the board rule · LOO miss x${oos.eligible.loo.medianMiss.toFixed(2)} (flat x${oos.eligible.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.eligible.loo.within3 * 100).toFixed(0)}% · rank corr ${oos.eligible.loo.rankCorr.toFixed(2)} (flat ${oos.eligible.loo.flatRankCorr.toFixed(2)})`);
+  console.log(`eligiblets fit ${oos.eligible.timeSplit.trainN} pre-2024, test ${oos.eligible.timeSplit.testN} newer · median miss x${oos.eligible.timeSplit.medianMiss.toFixed(2)} (flat x${oos.eligible.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.eligible.timeSplit.within3 * 100).toFixed(0)}% · rank corr ${oos.eligible.timeSplit.rankCorr.toFixed(2)} (flat ${oos.eligible.timeSplit.flatRankCorr.toFixed(2)})`);
+  const wfE = oos.walkForward.eligible;
+  const wfA = oos.walkForward.all;
+  console.log(`walk-fwd   eligible folds ${wfE.folds.map((f) => `${f.year}: x${f.medianMiss.toFixed(2)} (n=${f.testN})`).join(', ')} · pooled x${wfE.pooledMedianMiss.toFixed(2)} (flat x${wfE.flatPooledMedianMiss.toFixed(2)}) n=${wfE.pooledN} · all pooled x${wfA.pooledMedianMiss.toFixed(2)} n=${wfA.pooledN}`);
+  const widths = rankRange.map(([lo, hi]) => hi - lo).sort((a, b) => a - b);
+  console.log(`rank range 200 refits · median width ${widths[99]} ranks · widest ${widths[widths.length - 1]} · rank 1 range #${rankRange[0]![0]}-#${rankRange[0]![1]}`);
   console.log(`board      ${board.rows.length} rows · watchlist ${board.watchlistCovered}/${snapshot.watchlist.length} · early finds ${board.earlyFinds} · set aside ${board.setAside} · FARM ${board.verdicts.FARM} / THIN ${board.verdicts.THIN} / SKIP ${board.verdicts.SKIP}`);
   const farmNextTop = board.rows
-    .filter((r) => r.is_watchlist)
-    .sort((x, y) => y.net_per_hour_usd - x.net_per_hour_usd)[0]!;
+    .filter((r) => r.verdict === 'FARM')
+    .sort((x, y) => y.net_per_hour_usd - x.net_per_hour_usd)[0];
   const knifeEdge = board.rows.filter((r) => Math.abs(r.net_usd) < 1);
-  console.log(`farm next  ${farmNextTop.name} +$${farmNextTop.net_usd.toFixed(2)} net ($${farmNextTop.net_per_hour_usd.toFixed(2)}/h) · ${knifeEdge.length} rows within $1 of the THIN/SKIP line: ${knifeEdge.map((r) => `${r.name} ${r.net_usd >= 0 ? '+' : ''}$${r.net_usd.toFixed(2)}`).join(', ')}`);
+  console.log(`farm next  ${farmNextTop ? `${farmNextTop.name} +$${farmNextTop.net_usd.toFixed(2)} net ($${farmNextTop.net_per_hour_usd.toFixed(2)}/h)` : 'no FARM rows'} · ${knifeEdge.length} rows within $1 of the THIN/SKIP line: ${knifeEdge.map((r) => `${r.name} ${r.net_usd >= 0 ? '+' : ''}$${r.net_usd.toFixed(2)}`).join(', ')}`);
   console.log(`top 5      ${board.rows.slice(0, 5).map((r) => `${r.name} $${fmt(r.implied_value_usd)} ${r.verdict}`).join(' · ')}`);
   console.log(`board.json sha256 ${digest}`);
   console.log(`output     ${outDir} · dossier ${dossierBytes === -1 ? 'skipped' : `${fmt(dossierBytes)} bytes`} · ${shots.length} screenshots`);
