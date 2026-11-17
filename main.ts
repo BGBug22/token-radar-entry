@@ -41,6 +41,7 @@ import {
   bootstrapRankRanges,
   buildBoard,
   fitModel,
+  tradedComps,
   validateModel,
 } from './lib/model.ts';
 import type { BoardRow, Snapshot } from './lib/model.ts';
@@ -309,7 +310,7 @@ function main(): void {
 
   const snapshot = readSnapshot(inputPath);
   const fit = fitModel(snapshot.protocols);
-  const oos = validateModel(fit.comps, snapshot.as_of);
+  const oos = validateModel(tradedComps(snapshot.protocols), snapshot.as_of);
   const board = buildBoard(snapshot, fit, oos.loo.bandLo, oos.loo.bandHi);
   const rankRange = bootstrapRankRanges(board.rows, fit.comps, snapshot.as_of);
   validateBoard(board.rows, snapshot.watchlist);
@@ -355,7 +356,7 @@ function main(): void {
   console.log(`loo        median miss x${oos.loo.medianMiss.toFixed(2)} (flat x${oos.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.loo.within3 * 100).toFixed(0)}% (flat ${(oos.loo.flatWithin3 * 100).toFixed(0)}%) · rank corr ${oos.loo.rankCorr.toFixed(2)} (flat ${oos.loo.flatRankCorr.toFixed(2)}) · band x${oos.loo.bandLo.toFixed(2)}-x${oos.loo.bandHi.toFixed(2)}`);
   console.log(`time split fit ${oos.timeSplit.trainN} pre-2024, test ${oos.timeSplit.testN} newer · median miss x${oos.timeSplit.medianMiss.toFixed(2)} (flat x${oos.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.timeSplit.within3 * 100).toFixed(0)}% · rank corr ${oos.timeSplit.rankCorr.toFixed(2)} (flat ${oos.timeSplit.flatRankCorr.toFixed(2)})`);
   console.log(`bootstrap  ${oos.bootstrap.rounds} rounds seed ${oos.bootstrap.seed} · a ${oos.bootstrap.aMean.toFixed(3)} ± ${oos.bootstrap.aSd.toFixed(3)} · b ${oos.bootstrap.bMean.toFixed(3)} ± ${oos.bootstrap.bSd.toFixed(3)}`);
-  console.log(`eligible   92 comps pass the board rule · LOO miss x${oos.eligible.loo.medianMiss.toFixed(2)} (flat x${oos.eligible.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.eligible.loo.within3 * 100).toFixed(0)}% · rank corr ${oos.eligible.loo.rankCorr.toFixed(2)} (flat ${oos.eligible.loo.flatRankCorr.toFixed(2)})`);
+  console.log(`eligible   ${fit.comps.length} comps pass the board rule · LOO miss x${oos.eligible.loo.medianMiss.toFixed(2)} (flat x${oos.eligible.loo.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.eligible.loo.within3 * 100).toFixed(0)}% · rank corr ${oos.eligible.loo.rankCorr.toFixed(2)} (flat ${oos.eligible.loo.flatRankCorr.toFixed(2)})`);
   console.log(`eligiblets fit ${oos.eligible.timeSplit.trainN} pre-2024, test ${oos.eligible.timeSplit.testN} newer · median miss x${oos.eligible.timeSplit.medianMiss.toFixed(2)} (flat x${oos.eligible.timeSplit.flatMedianMiss.toFixed(2)}) · within 3x ${(oos.eligible.timeSplit.within3 * 100).toFixed(0)}% · rank corr ${oos.eligible.timeSplit.rankCorr.toFixed(2)} (flat ${oos.eligible.timeSplit.flatRankCorr.toFixed(2)})`);
   const wfE = oos.walkForward.eligible;
   const wfA = oos.walkForward.all;

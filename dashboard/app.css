@@ -280,11 +280,18 @@ td.neg { color: var(--red); }
 /* ---------------------------------------------------------------- detail */
 
 .detail {
+  grid-column: 1 / -1;
   margin-top: 16px;
   background: var(--panel);
   border: 1px solid var(--amber-dim);
   border-radius: 8px;
   padding: 16px 20px;
+}
+
+.detail-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 36px;
 }
 
 .detail h2 { margin: 0; font-size: 20px; }

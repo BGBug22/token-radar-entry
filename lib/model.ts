@@ -1,7 +1,11 @@
 // Launch Radar — the value model for token-radar-01.
 //
 // A pre-token protocol's implied value is fitted from the snapshot's own
-// traded tokens: an OLS size curve on log10 market cap vs log10 TVL,
+// traded tokens — but only the 92 that pass the board's own eligibility
+// rule: one per ticker, no CEX, no bridge, no liquid-staking product, no
+// version-marked name. The board itself excludes those tokens, so the
+// curve is fitted on the population it ranks, not on a mix the board
+// throws away. An OLS size curve on log10 market cap vs log10 TVL,
 // shrunk per-category offsets, a small momentum term from the 7-day TVL
 // change, and a record term for how long the protocol has run with no
 // token. Nothing is hardcoded by name: every number below follows from
@@ -18,9 +22,11 @@
 // THIN when the point-estimate net is non-negative but below that bar;
 // SKIP when the net is negative. The bridge that moves the $1,000 onto
 // the cheapest chain is priced beside the plan, not inside it: where the
-// money starts is the reader's, not the radar's, to know.
+// money starts is the reader's, not the radar's, to know. Every step of
+// the plan carries a calendar date: the deposit on the snapshot's date,
+// weekly checks each Saturday, the withdrawal 60 days on.
 //
-// What the leave-one-out says about each factor (128 comps, full grid
+// What the leave-one-out says about each factor (92 comps, full grid
 // in analysis/ablation-grid.json): the 7-day change is mostly noise, so
 // it carries a tenth of the weight v3 gave it (rank corr 0.401 -> 0.409,
 // median miss x3.52 -> x3.46); the record floor rose 0.70 -> 0.85 and
@@ -374,6 +380,11 @@ export function tradedComps(protocols: Protocol[]): Protocol[] {
   return protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
 }
 
+/** The comps the board itself could have ranked: traded tokens that pass the board's exclusion rule. */
+export function eligibleComps(comps: Protocol[]): Protocol[] {
+  return comps.filter((p) => !isExcluded(p));
+}
+
 /** OLS on log10 market cap against log10 TVL. Returns a, b and R squared. */
 export function olsFit(rows: Protocol[]): { a: number; b: number; rSquared: number } {
   const xs = rows.map((p) => Math.log10(p.tvl_usd));
@@ -425,9 +436,17 @@ export function peerOffsets(
   return out;
 }
 
-/** Fit the size curve and the peer offsets on the snapshot's comps. */
+/**
+ * Fit the size curve and the peer offsets on the snapshot's eligible
+ * comps only: the 92 traded tokens that pass the board's own exclusion
+ * rule. Fitting on all 128 traded tokens mixes in CEX, bridge and
+ * liquid-staking tokens the board itself throws away; the eligible-only
+ * fit predicts the board's own population far better out of sample
+ * (time split x1.90 against x2.59) at the same leave-one-out (x3.26
+ * against x3.22), and the board barely moves (top 20 identical).
+ */
 export function fitModel(protocols: Protocol[]): Fit {
-  const comps = tradedComps(protocols);
+  const comps = eligibleComps(tradedComps(protocols));
   const { a, b, rSquared } = olsFit(comps);
   const peers = peerOffsets(comps, a, b);
   return { a, b, rSquared, peers, comps };
@@ -529,15 +548,36 @@ export function farmFor(p: Protocol, impliedUsd: number): Farm {
   return { sliceUsd, gasUsd, gasChain: chain, gasPerTxUsd: perTx, bridgeUsd, netUsd, netHalfUsd, netAfterBridgeUsd, netPerHourUsd, verdict, breakEvenOdds };
 }
 
-/** The five concrete steps of the farm, with this protocol's own numbers. */
-export function farmSteps(p: Protocol, farm: Farm): string[] {
+/** "14 Nov 2026": a calendar date, no time, no timezone tricks. */
+export function fmtDate(d: Date): string {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** The date n days after an ISO date, at UTC midnight. */
+export function addDays(iso: string, n: number): Date {
+  return new Date(new Date(`${iso}T00:00:00Z`).getTime() + n * 86400000);
+}
+
+/**
+ * The five concrete steps of the farm, with this protocol's own numbers
+ * and calendar dates: the deposit on the snapshot's date, a check every
+ * Saturday (the snapshot fell on one), the withdrawal 60 days on.
+ * Each step stays inside the 20–600 characters the rules allow.
+ */
+export function farmSteps(p: Protocol, farm: Farm, asOf: string): string[] {
   const money = (x: number): string => `$${x.toFixed(2)}`;
+  const start = fmtDate(addDays(asOf, 0));
+  const end = fmtDate(addDays(asOf, HOLD_DAYS));
+  const checks = [7, 14, 21, 28, 35, 42, 49, 56]
+    .map((n) => fmtDate(addDays(asOf, n)).replace(/ \d{4}$/, ''))
+    .join(', ');
   return [
-    `Move $1,000 in USDC to ${farm.gasChain}, the cheapest chain ${p.name} runs on. Bridging it there from Ethereum costs about ${money(farm.bridgeUsd)} — counted beside the plan below, not inside it.`,
-    `Approve USDC for ${p.name} on ${farm.gasChain} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas at November 2026 prices.`,
-    `Deposit the $1,000 into ${p.name} on ${farm.gasChain} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas. This is the position that earns points if a token ever launches.`,
-    `Hold for 60 days and check the position once a week, about 10 minutes a week (2 hours of hands-on time in total). Leave early only if TVL falls 30% in a week.`,
-    `Withdraw the $1,000 and claim any points after 60 days — 2 transactions, about ${money(2 * farm.gasPerTxUsd)} in gas. Total gas about ${money(farm.gasUsd)}, plus $6.58 of T-bill yield given up on the $1,000 for 60 days.`,
+    `Move $1,000 in USDC to ${farm.gasChain} on ${start}, the cheapest chain ${p.name} runs on. Bridging it there from Ethereum costs about ${money(farm.bridgeUsd)} — counted beside the plan below, not inside it.`,
+    `Approve USDC for ${p.name} on ${farm.gasChain} on ${start} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas at November 2026 prices.`,
+    `Deposit the $1,000 into ${p.name} on ${farm.gasChain} on ${start} — 1 transaction, about ${money(farm.gasPerTxUsd)} in gas. This is the position that earns points if a token ever launches.`,
+    `Hold until ${end} (60 days) and check the position every Saturday — ${checks} — about 10 minutes a week (2 hours of hands-on time in total). Leave early only if TVL falls 30% in a week.`,
+    `Withdraw the $1,000 and claim any points on ${end} — 2 transactions, about ${money(2 * farm.gasPerTxUsd)} in gas. Total gas about ${money(farm.gasUsd)}, plus $6.58 of T-bill yield given up on the $1,000 for 60 days.`,
   ];
 }
 
@@ -578,7 +618,7 @@ export function buildBoard(
       name: p.name,
       rank: 0,
       implied_value_usd: wholeUsd(implied),
-      farm_steps: farmSteps(p, farm),
+      farm_steps: farmSteps(p, farm, snapshot.as_of),
       category: p.category,
       chains: p.chains,
       tvl_usd: p.tvl_usd,
@@ -647,18 +687,24 @@ interface LooOutcome {
 }
 
 /**
- * Leave-one-out over the comps: refit the curve and the peer offsets
- * without each token in turn, predict it, and compare with a flat
- * multiple (the train set's median market-cap-to-TVL) as the baseline.
- * The band is the P25–P75 of the actual-over-predicted ratios.
+ * Leave-one-out: refit the curve and the peer offsets on the training
+ * pool without each tested token in turn, predict it, and compare with
+ * a flat multiple (the train set's median market-cap-to-TVL) as the
+ * baseline. The band is the P25–P75 of the actual-over-predicted ratios.
+ * The training pool is the fit's own: the eligible comps. The tested
+ * set may be wider (all traded tokens) or the same pool.
  */
-export function looValidation(comps: Protocol[], asOf: string): LooOutcome {
+export function looValidation(
+  trainPool: Protocol[],
+  testSet: Protocol[],
+  asOf: string,
+): LooOutcome {
   const preds: number[] = [];
   const flats: number[] = [];
   const actual: number[] = [];
-  for (let i = 0; i < comps.length; i++) {
-    const held = comps[i]!;
-    const train = comps.filter((_, j) => j !== i);
+  for (let i = 0; i < testSet.length; i++) {
+    const held = testSet[i]!;
+    const train = trainPool.filter((p) => p !== held);
     const { a, b } = olsFit(train);
     const peers = peerOffsets(train, a, b);
     const peer = held.category !== null ? (peers[held.category] ?? 1) : 1;
@@ -690,15 +736,17 @@ export function looValidation(comps: Protocol[], asOf: string): LooOutcome {
 }
 
 /**
- * Time split: fit on the comps listed before 2024, test on the newer
- * tokens. Comps with no listing date take no part in either side.
+ * Time split: fit on the training pool's comps listed before 2024, test
+ * on the tested set's tokens listed in 2024 or later. Comps with no
+ * listing date take no part in either side.
  */
 export function timeSplitValidation(
-  comps: Protocol[],
+  trainPool: Protocol[],
+  testSet: Protocol[],
   asOf: string,
 ): { trainN: number; testN: number; medianMiss: number; within3: number; flatMedianMiss: number; rankCorr: number; flatRankCorr: number } {
-  const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
-  const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
+  const train = trainPool.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
+  const test = testSet.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
   const { a, b } = olsFit(train);
   const peers = peerOffsets(train, a, b);
   const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
@@ -760,118 +808,24 @@ export function bootstrapValidation(
   };
 }
 
-/** The full out-of-sample validation of a fitted model. */
-export function validateModel(comps: Protocol[], asOf: string): Oos {
-  const loo = looValidation(comps, asOf);
-  const timeSplit = timeSplitValidation(comps, asOf);
-  const bootstrap = bootstrapValidation(comps);
+/**
+ * The full out-of-sample validation of the fit. Every check trains on
+ * the fit's own pool — the 92 eligible comps — and is scored twice:
+ * once on all 128 traded tokens, once on the board's own population
+ * (the 92 eligible tokens). The eligible rows are the ones that matter:
+ * the curve is fitted on that population and ranks it.
+ */
+export function validateModel(allComps: Protocol[], asOf: string): Oos {
+  const train = eligibleComps(allComps);
+  const loo = looValidation(train, allComps, asOf);
+  const timeSplit = timeSplitValidation(train, allComps, asOf);
+  const bootstrap = bootstrapValidation(train);
   const eligible = {
-    loo: looValidationEligible(comps, asOf),
-    timeSplit: timeSplitValidationEligible(comps, asOf),
+    loo: looValidation(train, train, asOf),
+    timeSplit: timeSplitValidation(train, train, asOf),
   };
-  const walkForward = walkforwardValidation(comps, asOf);
+  const walkForward = walkforwardValidation(train, allComps, asOf);
   return { loo, timeSplit, bootstrap, eligible, walkForward };
-}
-
-/** The comps the board itself could have ranked: traded tokens that pass the board's exclusion rule. */
-export function eligibleComps(comps: Protocol[]): Protocol[] {
-  return comps.filter((p) => !isExcluded(p));
-}
-
-/**
- * Leave-one-out over the eligible comps only: each fold trains on all
- * comps minus the held one, and is scored on the held eligible token.
- * The flat multiple is the train set's median market-cap-to-TVL.
- */
-export function looValidationEligible(
-  comps: Protocol[],
-  asOf: string,
-): {
-  medianMiss: number;
-  within3: number;
-  rankCorr: number;
-  flatMedianMiss: number;
-  flatWithin3: number;
-  flatRankCorr: number;
-} {
-  const test = eligibleComps(comps);
-  const preds: number[] = [];
-  const flats: number[] = [];
-  const actual: number[] = [];
-  for (const held of test) {
-    const train = comps.filter((p) => p !== held);
-    const { a, b } = olsFit(train);
-    const peers = peerOffsets(train, a, b);
-    const peer = held.category !== null ? (peers[held.category] ?? 1) : 1;
-    const pred =
-      baseValue(held.tvl_usd, a, b) * peer * momentumFactor(held) * recordFactor(held, asOf);
-    preds.push(pred);
-    const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
-    flats.push(held.tvl_usd * median(multiples));
-    actual.push(held.mcap_usd!);
-  }
-  const misses = preds.map((p, i) => missRatio(p, actual[i]!));
-  const flatMisses = flats.map((p, i) => missRatio(p, actual[i]!));
-  const within = (arr: number[], k: number): number =>
-    arr.filter((m) => m <= k).length / arr.length;
-  return {
-    medianMiss: median(misses),
-    within3: within(misses, 3),
-    rankCorr: spearman(preds, actual),
-    flatMedianMiss: median(flatMisses),
-    flatWithin3: within(flatMisses, 3),
-    flatRankCorr: spearman(flats, actual),
-  };
-}
-
-/**
- * Time split on the eligible population: fit on all comps listed before
- * 2024, test on the eligible comps listed in 2024 or later.
- */
-export function timeSplitValidationEligible(
-  comps: Protocol[],
-  asOf: string,
-): {
-  trainN: number;
-  testN: number;
-  medianMiss: number;
-  within3: number;
-  flatMedianMiss: number;
-  rankCorr: number;
-  flatRankCorr: number;
-} {
-  const train = comps.filter((p) => p.listed_at !== null && p.listed_at < '2024-01-01');
-  const test = eligibleComps(comps).filter(
-    (p) => p.listed_at !== null && p.listed_at >= '2024-01-01',
-  );
-  const { a, b } = olsFit(train);
-  const peers = peerOffsets(train, a, b);
-  const multiples = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((x, y) => x - y);
-  const medMultiple = median(multiples);
-  const misses: number[] = [];
-  const flatMisses: number[] = [];
-  const preds: number[] = [];
-  const flats: number[] = [];
-  const actual: number[] = [];
-  for (const p of test) {
-    const peer = p.category !== null ? (peers[p.category] ?? 1) : 1;
-    const pred =
-      baseValue(p.tvl_usd, a, b) * peer * momentumFactor(p) * recordFactor(p, asOf);
-    preds.push(pred);
-    flats.push(p.tvl_usd * medMultiple);
-    actual.push(p.mcap_usd!);
-    misses.push(missRatio(pred, p.mcap_usd!));
-    flatMisses.push(missRatio(p.tvl_usd * medMultiple, p.mcap_usd!));
-  }
-  return {
-    trainN: train.length,
-    testN: test.length,
-    medianMiss: median(misses),
-    within3: misses.filter((m) => m <= 3).length / misses.length,
-    flatMedianMiss: median(flatMisses),
-    rankCorr: spearman(preds, actual),
-    flatRankCorr: spearman(flats, actual),
-  };
 }
 
 function walkforwardOn(
@@ -927,17 +881,18 @@ function walkforwardOn(
 }
 
 /**
- * Walk-forward on both populations: fit on the tokens listed before
- * each year, test on the next year's, expanding window. The eligible
- * run trains on all comps and tests on the eligible ones only.
+ * Walk-forward on both populations: fit on the training pool's tokens
+ * listed before each year, test on the next year's, expanding window.
+ * The eligible run tests on the eligible tokens only.
  */
 export function walkforwardValidation(
-  comps: Protocol[],
+  trainPool: Protocol[],
+  allComps: Protocol[],
   asOf: string,
 ): { all: Walkforward; eligible: Walkforward } {
   return {
-    all: walkforwardOn(comps, comps, asOf),
-    eligible: walkforwardOn(comps, eligibleComps(comps), asOf),
+    all: walkforwardOn(trainPool, allComps, asOf),
+    eligible: walkforwardOn(trainPool, eligibleComps(allComps), asOf),
   };
 }
 

@@ -225,6 +225,25 @@ function renderEarly() {
     .join('');
 }
 
+function renderFarmable() {
+  const order = { FARM: 0, THIN: 1, SKIP: 2 };
+  const list = [...rows].sort((a, b) => order[a.verdict] - order[b.verdict] || a.rank - b.rank);
+  $('#tbody-farmable').innerHTML = list
+    .map(
+      (r) => `<tr data-slug="${escapeHtml(r.slug)}">
+        <td class="num">${r.rank}</td>
+        <td><span class="name">${escapeHtml(r.name)}</span></td>
+        <td class="num">${fmtUsd(r.tvl_usd)}</td>
+        <td class="num">${fmtDays(r.days_no_token)}</td>
+        <td class="num">${fmtUsd(r.implied_value_usd)}</td>
+        <td class="num">${fmtMoney(r.slice_usd)}</td>
+        <td class="num ${r.net_usd < 0 ? 'neg' : ''}">${fmtMoney(r.net_usd)}</td>
+        <td><span class="verdict ${verdictClass(r.verdict)}">${r.verdict}</span></td>
+      </tr>`,
+    )
+    .join('');
+}
+
 function renderHero() {
   const farms = rows.filter((r) => r.verdict === 'FARM');
   if (farms.length === 0) return;
@@ -239,12 +258,12 @@ function renderOos() {
   const w = META.oos.walkForward.eligible;
   const pct = (x) => `${Math.round(x * 100)}%`;
   $('#oos-body').innerHTML = [
+    ['LOO · eligible 92', `×${e.loo.medianMiss.toFixed(2)}`, `×${e.loo.flatMedianMiss.toFixed(2)}`],
+    ['Time split · eligible 92', `×${e.timeSplit.medianMiss.toFixed(2)}`, `×${e.timeSplit.flatMedianMiss.toFixed(2)}`],
     ['Median miss', `×${o.medianMiss.toFixed(2)}`, `×${o.flatMedianMiss.toFixed(2)}`],
     ['Within 3×', pct(o.within3), pct(o.flatWithin3)],
     ['Within 10×', pct(o.within10), pct(o.flatWithin10)],
     ['Rank corr', o.rankCorr.toFixed(2), o.flatRankCorr.toFixed(2)],
-    ['LOO · eligible 92', `×${e.loo.medianMiss.toFixed(2)}`, `×${e.loo.flatMedianMiss.toFixed(2)}`],
-    ['Time split · eligible 92', `×${e.timeSplit.medianMiss.toFixed(2)}`, `×${e.timeSplit.flatMedianMiss.toFixed(2)}`],
     ['Walk-forward · pooled', `×${w.pooledMedianMiss.toFixed(2)}`, `×${w.flatPooledMedianMiss.toFixed(2)}`],
   ]
     .map(([label, curve, flat]) => `<tr><td>${label}</td><td class="num">${curve}</td><td class="num">${flat}</td></tr>`)
@@ -331,7 +350,7 @@ function fillMeta() {
   set('bSd', m.model.bootstrap.bSd.toFixed(3));
   set('bandLo', m.model.bandLo.toFixed(2));
   set('bandHi', m.model.bandHi.toFixed(2));
-  set('modelName', 'comps-fit-1');
+  set('modelName', 'comps-fit-2');
   const s = (key, text) => $$('[data-stat="' + key + '"]').forEach((el) => { el.textContent = text; });
   s('watchlist', `${m.counts.watchlistCovered}/${m.counts.watchlistTotal}`);
   s('boardRows', String(m.counts.boardRows));
@@ -341,6 +360,7 @@ function fillMeta() {
   s('loo', `×${m.oos.loo.medianMiss.toFixed(2)}`);
   $$('[data-tab-count="board"]').forEach((el) => { el.textContent = String(m.counts.boardRows); });
   $$('[data-tab-count="early"]').forEach((el) => { el.textContent = String(m.counts.earlyFinds); });
+  $$('[data-tab-count="farmable"]').forEach((el) => { el.textContent = String(m.verdicts.FARM); });
 }
 
 // ---------------------------------------------------------------- detail view
@@ -358,6 +378,7 @@ function openDetail(slug) {
   panel.innerHTML = `
     <h2>${escapeHtml(r.name)} <span class="tag ${r.is_watchlist ? 'tag-watch' : ''}">${r.is_watchlist ? 'watchlist' : ''}</span>${r.is_early ? ' <span class="tag tag-early">early</span>' : ''}</h2>
     <p class="detail-sub">Rank ${r.rank} of ${rows.length} · ${escapeHtml(r.category ?? 'Uncategorized')} · ${escapeHtml(r.chains.join(', '))} · no token for ${fmtDays(r.days_no_token)}</p>
+    <div class="detail-cols">
     <dl class="factors">
       <div><dt>Base (size curve)</dt><dd>${fmtUsd(r.base_usd)}</dd></div>
       <div><dt>Peers (${escapeHtml(r.category ?? 'Uncategorized')})</dt><dd>${fmtFactor(c.peers)}</dd></div>
@@ -381,6 +402,7 @@ function openDetail(slug) {
       <div><dt>Break-even launch odds</dt><dd>${Math.round(r.break_even_odds * 100)}%</dd></div>
       <div class="total"><dt>Verdict</dt><dd><span class="verdict ${verdictClass(r.verdict)}">${r.verdict}</span></dd></div>
     </dl>
+    </div>
     <h3>The farm, in five steps</h3>
     <ol class="steps">${steps}</ol>
     <button type="button" id="detail-close">Close</button>`;
@@ -398,6 +420,7 @@ function showTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $('#panel-board').classList.toggle('hidden', name !== 'board');
   $('#panel-early').classList.toggle('hidden', name !== 'early');
+  $('#panel-farmable').classList.toggle('hidden', name !== 'farmable');
   $('#panel-method').classList.toggle('hidden', name !== 'method');
 }
 
@@ -406,7 +429,7 @@ function applyHash() {
   const detail = hash.get('detail');
   const verdict = hash.get('verdict');
   const tab = hash.get('tab');
-  if (tab && ['board', 'early', 'method'].includes(tab)) showTab(tab);
+  if (tab && ['board', 'early', 'farmable', 'method'].includes(tab)) showTab(tab);
   if (verdict && ['FARM', 'THIN', 'SKIP'].includes(verdict)) {
     $('#f-verdict').value = verdict;
     showTab('board');
@@ -521,6 +544,7 @@ async function boot() {
     initControls();
     renderTable();
     renderEarly();
+    renderFarmable();
     renderHero();
     applyHash();
   } catch (err) {
